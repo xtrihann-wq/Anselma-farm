@@ -56,7 +56,8 @@ menu = st.sidebar.radio("Menu Navigasi:", [
     "📝 Catat Produksi Harian", 
     "🛒 Kasir / Penjualan", 
     "💸 Pencatatan Pengeluaran", 
-    "📁 Export Excel (Rapi)"
+    "📁 Export Excel (Rapi)",
+    "🗑️ Hapus Data Salah" 
 ])
 
 # ==========================================
@@ -221,3 +222,43 @@ elif menu == "📁 Export Excel (Rapi)":
             file_name=f"Laporan_PuyuhKu_{datetime.today().strftime('%d_%m_%Y')}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
+# --- HALAMAN HAPUS DATA ---
+elif menu == "🗑️ Hapus Data Salah":
+    st.title("🗑️ Hapus Pencatatan yang Salah")
+    st.warning("Perhatian: Data yang dihapus tidak dapat dikembalikan.")
+    
+    # 1. Pilih tabel/kategori yang datanya salah
+    tabel_pilihan = st.selectbox("Pilih Kategori Pencatatan:", ["produksi", "kasir", "pengeluaran"])
+    
+    # 2. Ambil data dari database beserta ID uniknya (rowid)
+    conn = sqlite3.connect('puyuhku.db')
+    # Kita panggil 'rowid' agar tiap baris punya nomor ID unik
+    df_hapus = pd.read_sql_query(f"SELECT rowid as ID, * FROM {tabel_pilihan}", conn)
+    conn.close()
+    
+    if df_hapus.empty:
+        st.info(f"Belum ada data pada kategori {tabel_pilihan}.")
+    else:
+        # Tampilkan tabel agar user bisa melihat ID data yang salah
+        st.dataframe(df_hapus, use_container_width=True)
+        
+        st.markdown("### Eksekusi Hapus Data")
+        with st.form("form_hapus"):
+            # User memilih ID dari data yang ingin dihapus
+            id_hapus = st.selectbox("Pilih ID Data yang ingin dihapus (Lihat kolom ID pada tabel di atas):", df_hapus["ID"].tolist())
+            konfirmasi = st.checkbox("Saya yakin ingin menghapus data ini")
+            
+            if st.form_submit_button("🚨 Hapus Data Sekarang"):
+                if konfirmasi:
+                    # Proses penghapusan data berdasarkan rowid
+                    conn = sqlite3.connect('puyuhku.db')
+                    c = conn.cursor()
+                    c.execute(f"DELETE FROM {tabel_pilihan} WHERE rowid=?", (id_hapus,))
+                    conn.commit()
+                    conn.close()
+                    
+                    st.success(f"✅ Data dengan ID {id_hapus} berhasil dihapus secara permanen!")
+                    # Me-refresh halaman agar tabel langsung terupdate
+                    st.rerun() 
+                else:
+                    st.error("Silakan centang kotak konfirmasi terlebih dahulu!")

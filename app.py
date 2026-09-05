@@ -49,17 +49,21 @@ VARIAN_TELUR = {
 # ==========================================
 # 3. NAVIGASI SIDEBAR
 # ==========================================
-st.sidebar.title("🐣 PuyuhKu")
-st.sidebar.markdown("Sistem Manajemen Tersimpan")
+# --- KODE BARU UNTUK MEMUNCULKAN LOGO ---
+st.sidebar.image("logo.jpeg", use_container_width=True)
+
+# Menyesuaikan judul web dengan nama di logo Anda
+st.sidebar.title("Anselma Farm") 
+st.sidebar.markdown("Sistem Manajemen Peternakan")
+
 menu = st.sidebar.radio("Menu Navigasi:", [
     "📊 Dashboard & Prediksi", 
     "📝 Catat Produksi Harian", 
     "🛒 Kasir / Penjualan", 
     "💸 Pencatatan Pengeluaran", 
     "📁 Export Excel (Rapi)",
-    "🗑️ Hapus Data Salah" 
+    "🗑️ Hapus Data Salah"
 ])
-
 # ==========================================
 # 4. LOGIKA HALAMAN & UI
 # ==========================================

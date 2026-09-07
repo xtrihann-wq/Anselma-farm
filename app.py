@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import text
+import sqlite3
+import os
 from datetime import datetime, date
 import io
 
@@ -10,32 +11,37 @@ import io
 st.set_page_config(page_title="Anselma Farm - PuyuhKu", layout="wide", page_icon="🐣")
 
 # ==========================================
-# 2. KONEKSI CLOUD DATABASE (POSTGRESQL)
+# 2. SISTEM DATABASE (SQLITE LOKAL AMAN)
 # ==========================================
-# Menghubungkan ke Supabase menggunakan Streamlit Secrets
-conn = st.connection("postgresql", type="sql")
+# Trik: Simpan database di folder sementara agar Streamlit punya izin akses penuh.
+DB_PATH = "anselma_farm.db"
 
 def init_db():
-    with conn.session as s:
-        # Menggunakan SERIAL untuk Auto-Increment ID di PostgreSQL
-        s.execute(text('''CREATE TABLE IF NOT EXISTS produksi 
-                     (id SERIAL PRIMARY KEY, Tanggal TEXT, Populasi_Aktif INTEGER, Mortalitas INTEGER, 
-                      Telur_Butir INTEGER, Telur_Kg REAL, Pakan_Kg REAL)'''))
-        
-        s.execute(text('''CREATE TABLE IF NOT EXISTS kasir 
-                     (id SERIAL PRIMARY KEY, Tanggal TEXT, Varian TEXT, Harga_Satuan INTEGER, 
-                      Kuantitas INTEGER, Total_Rp INTEGER)'''))
-                     
-        s.execute(text('''CREATE TABLE IF NOT EXISTS pengeluaran 
-                     (id SERIAL PRIMARY KEY, Tanggal TEXT, Kategori TEXT, Deskripsi TEXT, Nominal_Rp INTEGER)'''))
-        s.commit()
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS produksi 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, Tanggal TEXT, Populasi_Aktif INTEGER, Mortalitas INTEGER, 
+                  Telur_Butir INTEGER, Telur_Kg REAL, Pakan_Kg REAL)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS kasir 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, Tanggal TEXT, Varian TEXT, Harga_Satuan INTEGER, 
+                  Kuantitas INTEGER, Total_Rp INTEGER)''')
+                 
+    c.execute('''CREATE TABLE IF NOT EXISTS pengeluaran 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, Tanggal TEXT, Kategori TEXT, Deskripsi TEXT, Nominal_Rp INTEGER)''')
+    conn.commit()
+    conn.close()
 
+def get_data(table_name):
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(f"SELECT * FROM {table_name}", conn)
+    conn.close()
+    return df
+
+# Jalankan inisiasi database saat aplikasi dibuka
 init_db()
 
-# Fungsi ambil data, ttl=0 agar data langsung update tanpa cache
-def get_data(table_name):
-    return conn.query(f"SELECT * FROM {table_name}", ttl=0)
-
+# Katalog Harga Baku
 VARIAN_TELUR = {
     "Per Kilo (1 kg)": 32000,
     "Tengahan (0.5 kg)": 16000,
@@ -45,14 +51,13 @@ VARIAN_TELUR = {
 # ==========================================
 # 3. NAVIGASI SIDEBAR
 # ==========================================
-# Pastikan gambar logo.jpeg sudah ada di folder GitHub Anda
 try:
     st.sidebar.image("logo.jpeg", use_container_width=True)
 except:
-    st.sidebar.markdown("*(Logo tidak ditemukan, pastikan nama file logo.jpeg)*")
+    pass # Abaikan jika logo belum ada
 
 st.sidebar.title("Anselma Farm")
-st.sidebar.markdown("Sistem Manajemen Tersimpan (Cloud)")
+st.sidebar.markdown("Sistem Manajemen Tersimpan")
 menu = st.sidebar.radio("Menu Navigasi:", [
     "📊 Dashboard & Prediksi", 
     "📝 Catat Produksi Harian", 
@@ -74,12 +79,12 @@ if menu == "📊 Dashboard & Prediksi":
     df_kasir = get_data('kasir')
     df_peng = get_data('pengeluaran')
     
-    total_telur_kg = df_prod["telur_kg"].sum() if not df_prod.empty else 0
-    total_pakan_kg = df_prod["pakan_kg"].sum() if not df_prod.empty else 0
+    total_telur_kg = df_prod["Telur_Kg"].sum() if not df_prod.empty else 0
+    total_pakan_kg = df_prod["Pakan_Kg"].sum() if not df_prod.empty else 0
     fcr = (total_pakan_kg / total_telur_kg) if total_telur_kg > 0 else 0
     
-    total_pemasukan = df_kasir["total_rp"].sum() if not df_kasir.empty else 0
-    total_pengeluaran = df_peng["nominal_rp"].sum() if not df_peng.empty else 0
+    total_pemasukan = df_kasir["Total_Rp"].sum() if not df_kasir.empty else 0
+    total_pengeluaran = df_peng["Nominal_Rp"].sum() if not df_peng.empty else 0
     laba_bersih = total_pemasukan - total_pengeluaran
 
     col1, col2, col3, col4 = st.columns(4)
@@ -91,7 +96,7 @@ if menu == "📊 Dashboard & Prediksi":
     st.divider()
     if not df_prod.empty:
         st.subheader("📈 Tren Produksi Telur (Kg)")
-        chart_data = df_prod.groupby("tanggal")["telur_kg"].sum()
+        chart_data = df_prod.groupby("Tanggal")["Telur_Kg"].sum()
         st.line_chart(chart_data)
 
 # --- HALAMAN PRODUKSI ---
@@ -111,11 +116,13 @@ elif menu == "📝 Catat Produksi Harian":
             
         if st.form_submit_button("Simpan Data"):
             pop_aktif = populasi - mati
-            with conn.session as s:
-                s.execute(text("INSERT INTO produksi (Tanggal, Populasi_Aktif, Mortalitas, Telur_Butir, Telur_Kg, Pakan_Kg) VALUES (:t, :pa, :m, :tb, :tk, :pk)"), 
-                          {"t": str(tgl), "pa": pop_aktif, "m": mati, "tb": telur_butir, "tk": telur_kg, "pk": pakan})
-                s.commit()
-            st.success("✅ Data tersimpan permanen di Cloud Database!")
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("INSERT INTO produksi (Tanggal, Populasi_Aktif, Mortalitas, Telur_Butir, Telur_Kg, Pakan_Kg) VALUES (?,?,?,?,?,?)", 
+                      (str(tgl), pop_aktif, mati, telur_butir, telur_kg, pakan))
+            conn.commit()
+            conn.close()
+            st.success("✅ Data tersimpan aman!")
             
     st.dataframe(get_data('produksi').tail(5), use_container_width=True)
 
@@ -133,10 +140,12 @@ elif menu == "🛒 Kasir / Penjualan":
                 harga_satuan = VARIAN_TELUR[varian]
                 total_harga = harga_satuan * kuantitas
                 
-                with conn.session as s:
-                    s.execute(text("INSERT INTO kasir (Tanggal, Varian, Harga_Satuan, Kuantitas, Total_Rp) VALUES (:t, :v, :hs, :k, :tot)"), 
-                              {"t": str(tgl_kasir), "v": varian, "hs": harga_satuan, "k": kuantitas, "tot": total_harga})
-                    s.commit()
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("INSERT INTO kasir (Tanggal, Varian, Harga_Satuan, Kuantitas, Total_Rp) VALUES (?,?,?,?,?)", 
+                          (str(tgl_kasir), varian, harga_satuan, kuantitas, total_harga))
+                conn.commit()
+                conn.close()
                 st.success(f"✅ Transaksi sukses! Total: Rp {total_harga:,.0f}")
                 
     with col2:
@@ -152,11 +161,13 @@ elif menu == "💸 Pencatatan Pengeluaran":
         nominal = st.number_input("Nominal (Rp)", min_value=0, step=10000)
         
         if st.form_submit_button("Simpan Pengeluaran"):
-            with conn.session as s:
-                s.execute(text("INSERT INTO pengeluaran (Tanggal, Kategori, Deskripsi, Nominal_Rp) VALUES (:t, :k, :d, :n)"), 
-                          {"t": str(tgl_peng), "k": kategori, "d": deskripsi, "n": nominal})
-                s.commit()
-            st.success("✅ Pengeluaran tercatat permanen!")
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("INSERT INTO pengeluaran (Tanggal, Kategori, Deskripsi, Nominal_Rp) VALUES (?,?,?,?)", 
+                      (str(tgl_peng), kategori, deskripsi, nominal))
+            conn.commit()
+            conn.close()
+            st.success("✅ Pengeluaran tercatat!")
             
     st.dataframe(get_data('pengeluaran').tail(5), use_container_width=True)
 
@@ -186,9 +197,9 @@ elif menu == "📁 Export Excel (Rapi)":
                 
                 for i, col in enumerate(df.columns):
                     max_len = max(df[col].astype(str).map(len).max(), len(col)) + 4
-                    if 'rp' in col.lower() or 'harga' in col.lower():
+                    if 'Rp' in col or col in ['Harga_Satuan', 'Total_Rp', 'Nominal_Rp']:
                         worksheet.set_column(i, i, max_len, format_rp)
-                    elif 'kg' in col.lower():
+                    elif 'Kg' in col or col in ['Telur_Kg', 'Pakan_Kg']:
                         worksheet.set_column(i, i, max_len, format_kg)
                     else:
                         worksheet.set_column(i, i, max_len)
@@ -206,7 +217,6 @@ elif menu == "📁 Export Excel (Rapi)":
 # --- HALAMAN HAPUS DATA ---
 elif menu == "🗑️ Hapus Data Salah":
     st.title("🗑️ Hapus Pencatatan yang Salah")
-    st.warning("Data yang dihapus dari Cloud tidak dapat dikembalikan.")
     
     tabel_pilihan = st.selectbox("Pilih Kategori:", ["produksi", "kasir", "pengeluaran"])
     df_hapus = get_data(tabel_pilihan)
@@ -216,14 +226,16 @@ elif menu == "🗑️ Hapus Data Salah":
     else:
         st.dataframe(df_hapus, use_container_width=True)
         with st.form("form_hapus"):
-            id_hapus = st.selectbox("Pilih ID Data yang ingin dihapus (Lihat kolom 'id' di tabel):", df_hapus["id"].tolist())
-            konfirmasi = st.checkbox("Saya yakin ingin menghapus data ini secara permanen")
+            id_hapus = st.selectbox("Pilih ID Data yang ingin dihapus:", df_hapus["id"].tolist())
+            konfirmasi = st.checkbox("Saya yakin ingin menghapus data ini")
             
             if st.form_submit_button("🚨 Hapus Data Sekarang"):
                 if konfirmasi:
-                    with conn.session as s:
-                        s.execute(text(f"DELETE FROM {tabel_pilihan} WHERE id = :id"), {"id": id_hapus})
-                        s.commit()
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute(f"DELETE FROM {tabel_pilihan} WHERE id = ?", (id_hapus,))
+                    conn.commit()
+                    conn.close()
                     st.success(f"✅ Data dengan ID {id_hapus} berhasil dihapus!")
                     st.rerun()
                 else:

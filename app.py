@@ -13,7 +13,6 @@ st.set_page_config(page_title="Anselma Farm - PuyuhKu", layout="wide", page_icon
 # ==========================================
 # 2. SISTEM DATABASE (SQLITE LOKAL AMAN)
 # ==========================================
-# Trik: Simpan database di folder sementara agar Streamlit punya izin akses penuh.
 DB_PATH = "anselma_farm.db"
 
 def init_db():
@@ -38,10 +37,8 @@ def get_data(table_name):
     conn.close()
     return df
 
-# Jalankan inisiasi database saat aplikasi dibuka
 init_db()
 
-# Katalog Harga Baku
 VARIAN_TELUR = {
     "Per Kilo (1 kg)": 32000,
     "Tengahan (0.5 kg)": 16000,
@@ -54,7 +51,7 @@ VARIAN_TELUR = {
 try:
     st.sidebar.image("logo.jpeg", use_container_width=True)
 except:
-    pass # Abaikan jika logo belum ada
+    pass 
 
 st.sidebar.title("Anselma Farm")
 st.sidebar.markdown("Sistem Manajemen Tersimpan")
@@ -79,6 +76,7 @@ if menu == "📊 Dashboard & Prediksi":
     df_kasir = get_data('kasir')
     df_peng = get_data('pengeluaran')
     
+    # 1. Ringkasan Angka (Metrik)
     total_telur_kg = df_prod["Telur_Kg"].sum() if not df_prod.empty else 0
     total_pakan_kg = df_prod["Pakan_Kg"].sum() if not df_prod.empty else 0
     fcr = (total_pakan_kg / total_telur_kg) if total_telur_kg > 0 else 0
@@ -90,14 +88,59 @@ if menu == "📊 Dashboard & Prediksi":
     col1, col2, col3, col4 = st.columns(4)
     with col1: st.metric("Total Produksi", f"{total_telur_kg:.2f} Kg")
     with col2: st.metric("Rasio Pakan (FCR)", f"{fcr:.2f}")
-    with col3: st.metric("Pemasukan", f"Rp {total_pemasukan:,.0f}")
+    with col3: st.metric("Total Pemasukan", f"Rp {total_pemasukan:,.0f}")
     with col4: st.metric("Laba Bersih", f"Rp {laba_bersih:,.0f}")
 
     st.divider()
-    if not df_prod.empty:
+    
+    # 2. GRAFIK STATISTIK ARUS KAS UTAMA
+    st.subheader("💰 Statistik Arus Kas (Pemasukan vs Pengeluaran)")
+    
+    if not df_kasir.empty or not df_peng.empty:
+        # Menyiapkan data Pemasukan
+        if not df_kasir.empty:
+            kasir_harian = df_kasir.groupby('Tanggal')['Total_Rp'].sum().reset_index()
+            kasir_harian.rename(columns={'Total_Rp': 'Pemasukan'}, inplace=True)
+        else:
+            kasir_harian = pd.DataFrame(columns=['Tanggal', 'Pemasukan'])
+            
+        # Menyiapkan data Pengeluaran
+        if not df_peng.empty:
+            peng_harian = df_peng.groupby('Tanggal')['Nominal_Rp'].sum().reset_index()
+            peng_harian.rename(columns={'Nominal_Rp': 'Pengeluaran'}, inplace=True)
+        else:
+            peng_harian = pd.DataFrame(columns=['Tanggal', 'Pengeluaran'])
+            
+        # Menggabungkan data berdasarkan tanggal
+        df_arus_kas = pd.merge(kasir_harian, peng_harian, on='Tanggal', how='outer').fillna(0)
+        df_arus_kas = df_arus_kas.sort_values('Tanggal').set_index('Tanggal')
+        
+        # Menampilkan grafik batang (Hijau = Masuk, Merah = Keluar)
+        st.bar_chart(df_arus_kas, color=["#2ECC71", "#E74C3C"]) 
+    else:
+        st.info("Belum ada data transaksi keuangan untuk ditampilkan.")
+
+    st.divider()
+
+    # 3. GRAFIK PENDUKUNG (PRODUKSI & KATEGORI PENGELUARAN)
+    col_chart1, col_chart2 = st.columns(2)
+    
+    with col_chart1:
         st.subheader("📈 Tren Produksi Telur (Kg)")
-        chart_data = df_prod.groupby("Tanggal")["Telur_Kg"].sum()
-        st.line_chart(chart_data)
+        if not df_prod.empty:
+            chart_prod = df_prod.groupby("Tanggal")["Telur_Kg"].sum()
+            st.line_chart(chart_prod, color="#F1C40F") # Warna kuning/emas
+        else:
+            st.info("Belum ada data produksi telur.")
+            
+    with col_chart2:
+        st.subheader("📉 Distribusi Pengeluaran")
+        if not df_peng.empty:
+            # Mengelompokkan pengeluaran berdasarkan kategorinya
+            peng_kategori = df_peng.groupby('Kategori')['Nominal_Rp'].sum()
+            st.bar_chart(peng_kategori, color="#9B59B6") # Warna ungu
+        else:
+            st.info("Belum ada data pengeluaran.")
 
 # --- HALAMAN PRODUKSI ---
 elif menu == "📝 Catat Produksi Harian":

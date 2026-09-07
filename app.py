@@ -40,9 +40,9 @@ def get_data(table_name):
 init_db()
 
 VARIAN_TELUR = {
-    "Per Kilo (1 kg)": 32000,
-    "Tengahan (0.5 kg)": 16000,
-    "Seperempat (0.25 kg)": 8000
+    "Per Kilo (1 kg)": 33000,
+    "Tengahan (0.5 kg)": 16500,
+    "Seperempat (0.25 kg)": 9000
 }
 
 # ==========================================

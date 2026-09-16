@@ -307,7 +307,7 @@ elif menu == "📁 Export Excel (Rapi)":
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
-    
+
 # --- HALAMAN EDIT / HAPUS DATA ---
 elif menu == "✏️ Edit / Hapus Data":
     st.title("✏️ Edit atau Hapus Pencatatan")

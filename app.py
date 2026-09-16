@@ -258,72 +258,80 @@ elif menu == "💸 Pencatatan Pengeluaran":
             
     st.subheader("Riwayat Pengeluaran Terbaru")
     st.dataframe(get_display_df(df_peng).head(5), use_container_width=True)
-
-# --- HALAMAN EXPORT EXCEL (PERBAIKAN TOTAL, ANTI-ERROR) ---
+    
+# --- HALAMAN EXPORT EXCEL (SISTEM DETEKSI ERROR) ---
 elif menu == "📁 Export Excel (Rapi)":
     st.title("📁 Export Data ke Excel")
-    st.markdown("Data telah diurutkan berdasarkan tanggal secara rapi. Silakan unduh laporannya.")
     
     def generate_excel(df1, df2, df3):
         output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            workbook  = writer.book
-            
-            # Format Styling Manual (Anti Error)
-            header_format = workbook.add_format({'bold': True, 'font_color': 'white', 'bg_color': '#1F4E78', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
-            cell_format = workbook.add_format({'border': 1, 'valign': 'vcenter'})
-            format_rp = workbook.add_format({'num_format': 'Rp #,##0', 'border': 1, 'valign': 'vcenter'})
-            format_kg = workbook.add_format({'num_format': '0.00', 'border': 1, 'valign': 'vcenter'})
-            
-            def create_neat_sheet(df, sheet_name):
-                if df.empty:
-                    df_rep = pd.DataFrame({"Keterangan": ["Belum ada data"]})
-                else:
-                    df_rep = df.copy()
-                    # 1. Urutkan tanggal dari Terlama ke Terbaru (Untuk laporan Excel)
-                    df_rep = df_rep.sort_values(by='tanggal', ascending=True).reset_index(drop=True)
-                    # 2. Hapus kolom ID Database
-                    if 'id' in df_rep.columns:
-                        df_rep = df_rep.drop(columns=['id'])
-                    # 3. Buat Nomor Urut (1, 2, 3)
-                    df_rep.insert(0, 'No.', range(1, len(df_rep) + 1))
-                    # 4. Rapihkan Nama Kolom
-                    df_rep.columns = [str(c).replace('_', ' ').title() for c in df_rep.columns]
-
-                # Tulis data TANPA header default Pandas
-                df_rep.to_excel(writer, sheet_name=sheet_name, index=False, header=False, startrow=1)
-                worksheet = writer.sheets[sheet_name]
+        try:
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                workbook  = writer.book
+                header_format = workbook.add_format({'bold': True, 'font_color': 'white', 'bg_color': '#1F4E78', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+                cell_format = workbook.add_format({'border': 1, 'valign': 'vcenter'})
+                format_rp = workbook.add_format({'num_format': 'Rp #,##0', 'border': 1, 'valign': 'vcenter'})
+                format_kg = workbook.add_format({'num_format': '0.00', 'border': 1, 'valign': 'vcenter'})
                 
-                # Tulis header secara manual agar berwarna biru dan tidak crash
-                for col_num, value in enumerate(df_rep.columns):
-                    worksheet.write(0, col_num, value, header_format)
-                    
-                # Sesuaikan lebar dan format Rupiah/Kg
-                for i, col_name in enumerate(df_rep.columns):
-                    max_len = max(df_rep[col_name].astype(str).map(len).max(), len(col_name)) + 4
-                    if 'Rp' in col_name or 'Harga' in col_name or 'Nominal' in col_name or 'Total' in col_name:
-                        worksheet.set_column(i, i, max_len, format_rp)
-                    elif 'Kg' in col_name or 'Karung' in col_name:
-                        worksheet.set_column(i, i, max_len, format_kg)
+                def create_neat_sheet(df, sheet_name):
+                    if df.empty:
+                        df_rep = pd.DataFrame({"Keterangan": ["Belum ada data"]})
                     else:
-                        worksheet.set_column(i, i, max_len, cell_format)
+                        df_rep = df.copy()
+                        # Urutkan terlama ke terbaru dengan membalik tabel (Anti-Error)
+                        df_rep = df_rep.iloc[::-1].reset_index(drop=True)
+                        
+                        # Hapus ID dan kolom internal dengan aman
+                        hapus_cols = [c for c in df_rep.columns if str(c).lower() in ['id', 'berat_terjual_kg']]
+                        df_rep = df_rep.drop(columns=hapus_cols, errors='ignore')
+                        
+                        df_rep.insert(0, 'No.', range(1, len(df_rep) + 1))
+                        df_rep.columns = [str(c).replace('_', ' ').title() for c in df_rep.columns]
 
-            create_neat_sheet(df1, 'Data Produksi')
-            create_neat_sheet(df2, 'Data Penjualan')
-            create_neat_sheet(df3, 'Data Pengeluaran')
+                    df_rep.to_excel(writer, sheet_name=sheet_name, index=False, header=False, startrow=1)
+                    worksheet = writer.sheets[sheet_name]
+                    
+                    for col_num, value in enumerate(df_rep.columns):
+                        worksheet.write(0, col_num, value, header_format)
+                        
+                    for i, col_name in enumerate(df_rep.columns):
+                        try:
+                            data_max = df_rep[col_name].astype(str).map(len).max()
+                        except:
+                            data_max = 0
+                        max_len = max(int(data_max if pd.notna(data_max) else 0), len(col_name)) + 4
+                        
+                        if any(x in col_name for x in ['Rp', 'Harga', 'Nominal', 'Total']):
+                            worksheet.set_column(i, i, max_len, format_rp)
+                        elif any(x in col_name for x in ['Kg', 'Karung']):
+                            worksheet.set_column(i, i, max_len, format_kg)
+                        else:
+                            worksheet.set_column(i, i, max_len, cell_format)
+
+                create_neat_sheet(df1, 'Data Produksi')
+                create_neat_sheet(df2, 'Data Penjualan')
+                create_neat_sheet(df3, 'Data Pengeluaran')
+        except Exception as e:
+            return f"ERROR: {str(e)}"
             
         return output.getvalue()
     
     file_excel = generate_excel(df_prod, df_kasir, df_peng)
     
-    st.download_button(
-        label="📥 Download Excel Sekarang (.xlsx)", 
-        data=file_excel,
-        file_name=f"Laporan_AnselmaFarm_{datetime.today().strftime('%d_%m_%Y')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        type="primary"
-    )
+    if isinstance(file_excel, str) and file_excel.startswith("ERROR:"):
+        st.error("🚨 **GAGAL MEMBUAT EXCEL** 🚨")
+        st.code(file_excel)
+        st.info("💡 **Solusi:**\nPastikan `xlsxwriter` sudah Anda ketik di file `requirements.txt` GitHub. Lalu, lakukan **REBOOT** aplikasi (lihat panduan di bawah).")
+    else:
+        st.success("✅ File rekapitulasi Excel siap diunduh!")
+        st.download_button(
+            label="📥 Download Excel Sekarang (.xlsx)", 
+            data=file_excel,
+            file_name=f"Laporan_AnselmaFarm_{datetime.today().strftime('%d_%m_%Y')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            type="primary"
+        )
 
 # --- HALAMAN EDIT / HAPUS DATA ---
 elif menu == "✏️ Edit / Hapus Data":

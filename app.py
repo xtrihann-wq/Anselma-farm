@@ -28,7 +28,6 @@ def init_db():
                      (id SERIAL PRIMARY KEY, Tanggal TEXT, Kategori TEXT, Deskripsi TEXT, Nominal_Rp INTEGER)'''))
         s.commit()
         
-    # Migrasi Pintar (Menambah kolom baru otomatis jika belum ada)
     try:
         with conn.session as s:
             s.execute(text("ALTER TABLE kasir ADD COLUMN Keterangan_Pelanggan TEXT;"))
@@ -60,12 +59,10 @@ df_prod = get_data('produksi')
 df_kasir = get_data('kasir')
 df_peng = get_data('pengeluaran')
 
-# --- Kalkulasi Keuangan ---
 total_masuk = df_kasir["total_rp"].sum() if not df_kasir.empty else 0
 total_keluar = df_peng["nominal_rp"].sum() if not df_peng.empty else 0
 sisa_kas = total_masuk - total_keluar
 
-# --- Kalkulasi Stok Telur ---
 total_telur_panen = df_prod["telur_kg"].sum() if not df_prod.empty else 0
 
 def hitung_berat_terjual(row):
@@ -74,7 +71,7 @@ def hitung_berat_terjual(row):
     if "1 kg" in var: return 1.0 * qty
     elif "0.5 kg" in var: return 0.5 * qty
     elif "0.25 kg" in var: return 0.25 * qty
-    else: return 0.0 # Jika varian lainnya
+    else: return 0.0 
 
 if not df_kasir.empty:
     df_kasir['berat_terjual_kg'] = df_kasir.apply(hitung_berat_terjual, axis=1)
@@ -84,20 +81,18 @@ else:
 
 sisa_telur_kg = total_telur_panen - total_telur_terjual
 
-# --- Kalkulasi Stok Pakan ---
 if not df_peng.empty and 'jumlah_karung' in df_peng.columns:
     total_karung_masuk = df_peng["jumlah_karung"].sum()
 else:
     total_karung_masuk = 0
     
-total_pakan_masuk_kg = total_karung_masuk * 50 # 1 Karung = 50 Kg
+total_pakan_masuk_kg = total_karung_masuk * 50 
 total_pakan_terpakai_kg = df_prod["pakan_kg"].sum() if not df_prod.empty else 0
-
 sisa_pakan_kg = total_pakan_masuk_kg - total_pakan_terpakai_kg
 sisa_pakan_karung = sisa_pakan_kg / 50 if sisa_pakan_kg > 0 else 0
 
 # ==========================================
-# 4. NAVIGASI & TAMPILAN SIDEBAR
+# 4. NAVIGASI SIDEBAR
 # ==========================================
 try:
     st.sidebar.image("logo.jpeg", use_container_width=True)
@@ -106,20 +101,17 @@ except: pass
 st.sidebar.title("Anselma Farm")
 st.sidebar.markdown("Sistem Manajemen Tersimpan")
 
-# TAMPILAN SISA KAS
 if sisa_kas >= 0:
     st.sidebar.success(f"💰 **Sisa Uang Kas:**\n### Rp {sisa_kas:,.0f}")
 else:
     st.sidebar.error(f"⚠️ **Kas Minus:**\n### Rp {sisa_kas:,.0f}")
 
-# TAMPILAN SISA STOK
 st.sidebar.info(f"🥚 **Sisa Stok Telur:**\n### {sisa_telur_kg:.2f} Kg")
 
 if sisa_pakan_kg >= 0:
     st.sidebar.warning(f"🌾 **Sisa Stok Pakan:**\n### {sisa_pakan_karung:.1f} Karung \n*({sisa_pakan_kg:.1f} Kg)*")
 else:
-    # Jika pakan minus (artinya peternak mencatat pakan harian tapi belum mencatat nota beli pakan)
-    st.sidebar.error(f"🌾 **Sisa Pakan Minus!**\n### {sisa_pakan_kg:.1f} Kg\n*(Catat nota beli pakan di menu Pengeluaran)*")
+    st.sidebar.error(f"🌾 **Sisa Pakan Minus!**\n### {sisa_pakan_kg:.1f} Kg")
 
 st.sidebar.divider()
 menu = st.sidebar.radio("Menu Navigasi:", [
@@ -225,16 +217,15 @@ elif menu == "🛒 Kasir / Penjualan":
         st.subheader("Riwayat Penjualan Terbaru")
         st.dataframe(df_kasir.head(5), use_container_width=True)
 
-# --- HALAMAN PENGELUARAN (UPGRADED) ---
+# --- HALAMAN PENGELUARAN ---
 elif menu == "💸 Pencatatan Pengeluaran":
     st.title("💸 Catat Arus Kas Keluar")
     with st.form("form_pengeluaran", clear_on_submit=True):
         tgl_peng = st.date_input("Tanggal", date.today())
         kategori = st.selectbox("Kategori", ["Beli Pakan", "Vitamin/Obat", "Gaji Karyawan", "Listrik & Air", "Lainnya"])
         
-        # Opsi khusus jika memilih "Beli Pakan"
         if kategori == "Beli Pakan":
-            st.info("💡 Karena memilih 'Beli Pakan', silakan isi jumlah karung di bawah ini agar stok ter-update.")
+            st.info("💡 Masukkan jumlah karung agar stok pakan bertambah.")
             jml_karung = st.number_input("Jumlah Beli (Karung) - 1 Karung=50kg", min_value=0.0, step=0.5)
         else:
             jml_karung = 0.0
@@ -252,42 +243,31 @@ elif menu == "💸 Pencatatan Pengeluaran":
             
     st.subheader("Riwayat Pengeluaran Terbaru")
     st.dataframe(df_peng.head(5), use_container_width=True)
-# --- HALAMAN EXPORT EXCEL ---
+
+# --- HALAMAN EXPORT EXCEL (PERBAIKAN TOTAL) ---
 elif menu == "📁 Export Excel (Rapi)":
     st.title("📁 Export Data ke Excel")
-    st.markdown("Sistem telah merekap data Anda. Silakan unduh laporan lengkap di bawah ini.")
+    st.markdown("Silakan klik tombol di bawah untuk mengunduh laporan rekapitulasi data Anselma Farm.")
     
-    # 1. Tarik data langsung
-    df_prod = get_data('produksi')
-    df_kasir = get_data('kasir')
-    df_peng = get_data('pengeluaran')
+    # Fungsi Pembungkus (Official Streamlit Method) agar aman dari error download
+    def generate_excel(df1, df2, df3):
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            if df1.empty: df1 = pd.DataFrame({"Data": ["Kosong"]})
+            if df2.empty: df2 = pd.DataFrame({"Data": ["Kosong"]})
+            if df3.empty: df3 = pd.DataFrame({"Data": ["Kosong"]})
+                
+            df1.to_excel(writer, sheet_name='Produksi', index=False)
+            df2.to_excel(writer, sheet_name='Penjualan', index=False)
+            df3.to_excel(writer, sheet_name='Pengeluaran', index=False)
+        return output.getvalue()
     
-    # 2. Buat file Excel di memori menggunakan "Mode Aman"
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        
-        def create_safe_sheet(df, sheet_name):
-            if df.empty:
-                df = pd.DataFrame({"Keterangan": ["Belum ada data pada tabel ini."]})
-            
-            # Pandas menulis data murni ke Excel (Tanpa tabel biru otomatis yang bikin error)
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
-            worksheet = writer.sheets[sheet_name]
-            
-            # Melebarkan kolom secara otomatis agar tulisan tidak terpotong
-            for i, col in enumerate(df.columns):
-                max_len = max(df[col].astype(str).map(len).max(), len(str(col))) + 3
-                worksheet.set_column(i, i, max_len)
-
-        # Eksekusi pembuatan 3 sheet
-        create_safe_sheet(df_prod, 'Data_Produksi')
-        create_safe_sheet(df_kasir, 'Data_Penjualan')
-        create_safe_sheet(df_peng, 'Data_Pengeluaran')
-        
-    # 3. Tombol download (Menggunakan .getvalue() agar aman dari sistem putus jaringan)
+    # Panggil fungsi dan simpan di memori
+    file_excel = generate_excel(df_prod, df_kasir, df_peng)
+    
     st.download_button(
         label="📥 Download Excel Sekarang (.xlsx)", 
-        data=output.getvalue(), 
+        data=file_excel,
         file_name=f"Laporan_AnselmaFarm_{datetime.today().strftime('%d_%m_%Y')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
@@ -297,7 +277,6 @@ elif menu == "📁 Export Excel (Rapi)":
 # --- HALAMAN EDIT / HAPUS DATA ---
 elif menu == "✏️ Edit / Hapus Data":
     st.title("✏️ Edit atau Hapus Pencatatan")
-    st.markdown("Pilih tabel dan ID data yang ingin diperbaiki.")
     
     tabel_pilihan = st.selectbox("Pilih Kategori Pencatatan:", ["produksi", "kasir", "pengeluaran"])
     

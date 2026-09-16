@@ -43,20 +43,16 @@ def init_db():
 init_db()
 
 def get_data(table_name):
-    # Mengambil data mentah dari database
-    return conn.query(f"SELECT * FROM {table_name}", ttl=0)
+    # Selalu ambil data terbaru dari database, diurutkan descending
+    return conn.query(f"SELECT * FROM {table_name} ORDER BY Tanggal DESC, id DESC", ttl=0)
 
-# --- FITUR BARU: Merapihkan Tabel di Web (No Urut Otomatis) ---
 def get_display_df(df):
     if df.empty: return df
     df_disp = df.copy()
-    # Urutkan berdasarkan tanggal terbaru ke terlama
-    df_disp = df_disp.sort_values(by='tanggal', ascending=False).reset_index(drop=True)
-    # Hapus ID Database dan ganti jadi No. Urut
+    df_disp = df_disp.sort_values(by=['tanggal', 'id'], ascending=[False, False]).reset_index(drop=True)
     if 'id' in df_disp.columns:
         df_disp = df_disp.drop(columns=['id'])
     df_disp.insert(0, 'No.', range(1, len(df_disp) + 1))
-    # Rapihkan judul kolom
     df_disp.columns = [str(c).replace('_', ' ').title() for c in df_disp.columns]
     return df_disp
 
@@ -74,10 +70,12 @@ df_prod = get_data('produksi')
 df_kasir = get_data('kasir')
 df_peng = get_data('pengeluaran')
 
+# Hitung Keuangan
 total_masuk = df_kasir["total_rp"].sum() if not df_kasir.empty else 0
 total_keluar = df_peng["nominal_rp"].sum() if not df_peng.empty else 0
 sisa_kas = total_masuk - total_keluar
 
+# Hitung Telur
 total_telur_panen = df_prod["telur_kg"].sum() if not df_prod.empty else 0
 
 def hitung_berat_terjual(row):
@@ -96,6 +94,7 @@ else:
 
 sisa_telur_kg = total_telur_panen - total_telur_terjual
 
+# Hitung Pakan
 if not df_peng.empty and 'jumlah_karung' in df_peng.columns:
     total_karung_masuk = df_peng["jumlah_karung"].sum()
 else:
@@ -258,10 +257,11 @@ elif menu == "💸 Pencatatan Pengeluaran":
             
     st.subheader("Riwayat Pengeluaran Terbaru")
     st.dataframe(get_display_df(df_peng).head(5), use_container_width=True)
-    
-# --- HALAMAN EXPORT EXCEL (SISTEM DETEKSI ERROR) ---
+
+# --- HALAMAN EXPORT EXCEL ---
 elif menu == "📁 Export Excel (Rapi)":
     st.title("📁 Export Data ke Excel")
+    st.markdown("Sistem telah menyiapkan rekapitulasi data Anda. Data akan diurutkan dari yang terlama hingga terbaru di dalam file Excel.")
     
     def generate_excel(df1, df2, df3):
         output = io.BytesIO()
@@ -278,22 +278,27 @@ elif menu == "📁 Export Excel (Rapi)":
                         df_rep = pd.DataFrame({"Keterangan": ["Belum ada data"]})
                     else:
                         df_rep = df.copy()
-                        # Urutkan terlama ke terbaru dengan membalik tabel (Anti-Error)
-                        df_rep = df_rep.iloc[::-1].reset_index(drop=True)
+                        # Balik urutan: Terlama di atas untuk laporan Excel
+                        df_rep = df_rep.sort_values(by=['tanggal', 'id'], ascending=[True, True]).reset_index(drop=True)
                         
-                        # Hapus ID dan kolom internal dengan aman
+                        # Hapus ID dan kolom internal lainnya
                         hapus_cols = [c for c in df_rep.columns if str(c).lower() in ['id', 'berat_terjual_kg']]
                         df_rep = df_rep.drop(columns=hapus_cols, errors='ignore')
                         
+                        # Buat kolom No.
                         df_rep.insert(0, 'No.', range(1, len(df_rep) + 1))
+                        # Rapihkan judul kolom
                         df_rep.columns = [str(c).replace('_', ' ').title() for c in df_rep.columns]
 
+                    # Tulis Data
                     df_rep.to_excel(writer, sheet_name=sheet_name, index=False, header=False, startrow=1)
                     worksheet = writer.sheets[sheet_name]
                     
+                    # Tulis Header (Judul Kolom)
                     for col_num, value in enumerate(df_rep.columns):
                         worksheet.write(0, col_num, value, header_format)
                         
+                    # Atur Lebar Kolom
                     for i, col_name in enumerate(df_rep.columns):
                         try:
                             data_max = df_rep[col_name].astype(str).map(len).max()
@@ -321,7 +326,7 @@ elif menu == "📁 Export Excel (Rapi)":
     if isinstance(file_excel, str) and file_excel.startswith("ERROR:"):
         st.error("🚨 **GAGAL MEMBUAT EXCEL** 🚨")
         st.code(file_excel)
-        st.info("💡 **Solusi:**\nPastikan `xlsxwriter` sudah Anda ketik di file `requirements.txt` GitHub. Lalu, lakukan **REBOOT** aplikasi (lihat panduan di bawah).")
+        st.info("💡 **PENTING:** Pastikan file `requirements.txt` Anda memiliki tulisan `xlsxwriter`. Lalu lakukan Reboot App di Streamlit.")
     else:
         st.success("✅ File rekapitulasi Excel siap diunduh!")
         st.download_button(
@@ -347,14 +352,12 @@ elif menu == "✏️ Edit / Hapus Data":
         st.info(f"Belum ada data pada kategori {tabel_pilihan}.")
     else:
         # Menampilkan tabel ASLI (dengan ID) tapi diurutkan berdasarkan terbaru di atas
-        df_edit_tampil = df_edit.sort_values(by='tanggal', ascending=False).reset_index(drop=True)
+        df_edit_tampil = df_edit.sort_values(by=['tanggal', 'id'], ascending=[False, False]).reset_index(drop=True)
         st.dataframe(df_edit_tampil, use_container_width=True)
         st.divider()
         st.subheader("Pengaturan Data Spesifik")
         
         aksi = st.radio("Pilih Tindakan:", ["✏️ Edit Data", "🗑️ Hapus Data"], horizontal=True)
-        
-        # Opsi ID mengikuti data yang ada
         id_pilih = st.selectbox("Pilih ID Data (Lihat Kolom 'id' di tabel):", df_edit_tampil["id"].tolist())
         row_data = df_edit_tampil[df_edit_tampil["id"] == id_pilih].iloc[0]
         

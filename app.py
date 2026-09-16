@@ -10,12 +10,12 @@ import io
 st.set_page_config(page_title="Anselma Farm - PuyuhKu", layout="wide", page_icon="🐣")
 
 # ==========================================
-# 2. KONEKSI KE NEON CLOUD DATABASE (ANTI-RESET)
+# 2. KONEKSI CLOUD DATABASE NEON
 # ==========================================
-# Menggunakan ttl=0 agar tidak ada data yang tersangkut di cache memori sementara
 conn = st.connection("postgresql", type="sql")
 
 def init_db():
+    # Membuat tabel jika belum ada
     with conn.session as s:
         s.execute(text('''CREATE TABLE IF NOT EXISTS produksi 
                      (id SERIAL PRIMARY KEY, Tanggal TEXT, Populasi_Aktif INTEGER, Mortalitas INTEGER, 
@@ -28,21 +28,42 @@ def init_db():
         s.execute(text('''CREATE TABLE IF NOT EXISTS pengeluaran 
                      (id SERIAL PRIMARY KEY, Tanggal TEXT, Kategori TEXT, Deskripsi TEXT, Nominal_Rp INTEGER)'''))
         s.commit()
+        
+    # Migrasi Pintar: Menambahkan kolom Keterangan Pelanggan jika sebelumnya belum ada di tabel kasir
+    try:
+        with conn.session as s:
+            s.execute(text("ALTER TABLE kasir ADD COLUMN Keterangan_Pelanggan TEXT;"))
+            s.commit()
+    except Exception:
+        pass # Abaikan jika kolom sudah ada
 
 init_db()
 
-# Fungsi ambil data langsung dari server Cloud
+# Fungsi ambil data
 def get_data(table_name):
     return conn.query(f"SELECT * FROM {table_name} ORDER BY id ASC", ttl=0)
 
+# Katalog Harga (Sebagai Harga Dasar / Default)
 VARIAN_TELUR = {
-    "Per Kilo (1 kg)": 33000,
-    "Tengahan (0.5 kg)": 16500,
-    "Seperempat (0.25 kg)": 9000
+    "Per Kilo (1 kg)": 32000,
+    "Tengahan (0.5 kg)": 16000,
+    "Seperempat (0.25 kg)": 8000,
+    "Harga Khusus/Lainnya": 0 # Opsi tambahan
 }
 
 # ==========================================
-# 3. NAVIGASI SIDEBAR
+# 3. MENGAMBIL DATA GLOBAL & HITUNG SISA KAS
+# ==========================================
+df_prod = get_data('produksi')
+df_kasir = get_data('kasir')
+df_peng = get_data('pengeluaran')
+
+total_masuk = df_kasir["total_rp"].sum() if not df_kasir.empty else 0
+total_keluar = df_peng["nominal_rp"].sum() if not df_peng.empty else 0
+sisa_kas = total_masuk - total_keluar
+
+# ==========================================
+# 4. NAVIGASI SIDEBAR
 # ==========================================
 try:
     st.sidebar.image("logo.jpeg", use_container_width=True)
@@ -51,6 +72,12 @@ except:
 
 st.sidebar.title("Anselma Farm")
 st.sidebar.markdown("Sistem Manajemen Cloud Permanen")
+
+if sisa_kas >= 0:
+    st.sidebar.success(f"💰 **Sisa Uang Kas:**\n### Rp {sisa_kas:,.0f}")
+else:
+    st.sidebar.error(f"⚠️ **Kas Minus:**\n### Rp {sisa_kas:,.0f}")
+
 menu = st.sidebar.radio("Menu Navigasi:", [
     "📊 Dashboard & Arus Kas", 
     "📝 Catat Produksi Harian", 
@@ -61,34 +88,26 @@ menu = st.sidebar.radio("Menu Navigasi:", [
 ])
 
 # ==========================================
-# 4. LOGIKA HALAMAN & UI
+# 5. LOGIKA HALAMAN & UI
 # ==========================================
 
 # --- HALAMAN DASHBOARD ---
 if menu == "📊 Dashboard & Arus Kas":
     st.title("📊 Dashboard Utama Anselma Farm")
     
-    df_prod = get_data('produksi')
-    df_kasir = get_data('kasir')
-    df_peng = get_data('pengeluaran')
-    
     total_telur_kg = df_prod["telur_kg"].sum() if not df_prod.empty else 0
     total_pakan_kg = df_prod["pakan_kg"].sum() if not df_prod.empty else 0
     fcr = (total_pakan_kg / total_telur_kg) if total_telur_kg > 0 else 0
-    
-    total_pemasukan = df_kasir["total_rp"].sum() if not df_kasir.empty else 0
-    total_pengeluaran = df_peng["nominal_rp"].sum() if not df_peng.empty else 0
-    laba_bersih = total_pemasukan - total_pengeluaran
 
     col1, col2, col3, col4 = st.columns(4)
-    with col1: st.metric("Total Produksi", f"{total_telur_kg:.2f} Kg")
+    with col1: st.metric("Total Produksi Telur", f"{total_telur_kg:.2f} Kg")
     with col2: st.metric("Rasio Pakan (FCR)", f"{fcr:.2f}")
-    with col3: st.metric("Pemasukan", f"Rp {total_pemasukan:,.0f}")
-    with col4: st.metric("Laba Bersih", f"Rp {laba_bersih:,.0f}")
+    with col3: st.metric("Total Pemasukan", f"Rp {total_masuk:,.0f}")
+    with col4: st.metric("Total Pengeluaran", f"Rp {total_keluar:,.0f}")
 
     st.divider()
     
-    st.subheader("💰 Statistik Arus Kas")
+    st.subheader("💰 Statistik Arus Kas (Masuk vs Keluar)")
     if not df_kasir.empty or not df_peng.empty:
         if not df_kasir.empty:
             kasir_harian = df_kasir.groupby('tanggal')['total_rp'].sum().reset_index()
@@ -106,7 +125,7 @@ if menu == "📊 Dashboard & Arus Kas":
         df_arus_kas = df_arus_kas.sort_values('Tanggal').set_index('Tanggal')
         st.bar_chart(df_arus_kas, color=["#2ECC71", "#E74C3C"]) 
     else:
-        st.info("Belum ada data keuangan.")
+        st.info("Belum ada data keuangan untuk ditampilkan.")
 
     st.divider()
 
@@ -149,31 +168,48 @@ elif menu == "📝 Catat Produksi Harian":
                           {"t": str(tgl), "pa": pop_aktif, "m": mati, "tb": telur_butir, "tk": telur_kg, "pk": pakan})
                 s.commit()
             st.success("✅ Data tersimpan permanen di Cloud!")
+            st.rerun()
             
-    st.dataframe(get_data('produksi').tail(5), use_container_width=True)
+    st.dataframe(df_prod.tail(5), use_container_width=True)
 
-# --- HALAMAN KASIR ---
+# --- HALAMAN KASIR (SUDAH DIUPGRADE) ---
 elif menu == "🛒 Kasir / Penjualan":
     st.title("🛒 Kasir Penjualan")
     col1, col2 = st.columns([1, 1])
+    
     with col1:
-        with st.form("form_kasir", clear_on_submit=True):
-            tgl_kasir = st.date_input("Tanggal Transaksi", date.today())
-            varian = st.selectbox("Pilih Varian Berat", list(VARIAN_TELUR.keys()))
-            kuantitas = st.number_input("Kuantitas (Jumlah)", min_value=1, value=1)
-            
-            if st.form_submit_button("Bayar & Simpan"):
-                harga_satuan = VARIAN_TELUR[varian]
-                total_harga = harga_satuan * kuantitas
-                
-                with conn.session as s:
-                    s.execute(text("INSERT INTO kasir (Tanggal, Varian, Harga_Satuan, Kuantitas, Total_Rp) VALUES (:t, :v, :hs, :k, :tot)"), 
-                              {"t": str(tgl_kasir), "v": varian, "hs": harga_satuan, "k": kuantitas, "tot": total_harga})
-                    s.commit()
-                st.success(f"✅ Transaksi sukses! Total: Rp {total_harga:,.0f}")
+        st.subheader("Input Transaksi Baru")
+        # Dikeluarkan dari st.form agar harga_satuan bisa merespon interaksi secara live
+        tgl_kasir = st.date_input("Tanggal Transaksi", date.today())
+        
+        # 1. Keterangan Pelanggan
+        keterangan = st.text_input("Nama/Keterangan Pelanggan (Opsional)", placeholder="Contoh: Pak Budi (Warung) / Bu Tini")
+        
+        # 2. Varian Telur
+        varian = st.selectbox("Pilih Varian Berat", list(VARIAN_TELUR.keys()))
+        
+        # 3. Harga Satuan (Bisa diedit/diatur manual jika harga naik/turun)
+        harga_dasar = VARIAN_TELUR[varian]
+        harga_satuan = st.number_input("Harga Satuan (Rp) - Bisa diubah manual", min_value=0, value=harga_dasar, step=500)
+        
+        # 4. Kuantitas
+        kuantitas = st.number_input("Kuantitas (Jumlah Beli)", min_value=1, value=1)
+        
+        # Kalkulasi Total Real-time
+        total_harga = harga_satuan * kuantitas
+        st.info(f"💵 **TOTAL PEMBAYARAN: Rp {total_harga:,.0f}**")
+        
+        if st.button("Simpan Transaksi 💾", use_container_width=True, type="primary"):
+            with conn.session as s:
+                s.execute(text("INSERT INTO kasir (Tanggal, Varian, Harga_Satuan, Kuantitas, Total_Rp, Keterangan_Pelanggan) VALUES (:t, :v, :hs, :k, :tot, :ket)"), 
+                          {"t": str(tgl_kasir), "v": varian, "hs": harga_satuan, "k": kuantitas, "tot": total_harga, "ket": keterangan})
+                s.commit()
+            st.success(f"✅ Transaksi dari pelanggan dicatat! Saldo bertambah.")
+            st.rerun()
                 
     with col2:
-        st.dataframe(get_data('kasir').tail(5), use_container_width=True)
+        st.subheader("Riwayat Penjualan")
+        st.dataframe(df_kasir.tail(5), use_container_width=True)
 
 # --- HALAMAN PENGELUARAN ---
 elif menu == "💸 Pencatatan Pengeluaran":
@@ -189,19 +225,16 @@ elif menu == "💸 Pencatatan Pengeluaran":
                 s.execute(text("INSERT INTO pengeluaran (Tanggal, Kategori, Deskripsi, Nominal_Rp) VALUES (:t, :k, :d, :n)"), 
                           {"t": str(tgl_peng), "k": kategori, "d": deskripsi, "n": nominal})
                 s.commit()
-            st.success("✅ Pengeluaran tercatat permanen!")
+            st.success("✅ Pengeluaran tercatat! Sisa kas otomatis berkurang.")
+            st.rerun()
             
-    st.dataframe(get_data('pengeluaran').tail(5), use_container_width=True)
+    st.dataframe(df_peng.tail(5), use_container_width=True)
 
 # --- HALAMAN EXPORT EXCEL ---
 elif menu == "📁 Export Excel (Rapi)":
     st.title("📁 Export Data ke Excel")
     
     if st.button("🔄 Generate File Excel"):
-        df_prod = get_data('produksi')
-        df_kasir = get_data('kasir')
-        df_peng = get_data('pengeluaran')
-        
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             workbook  = writer.book
@@ -241,7 +274,10 @@ elif menu == "🗑️ Hapus Data Salah":
     st.title("🗑️ Hapus Pencatatan yang Salah")
     
     tabel_pilihan = st.selectbox("Pilih Kategori:", ["produksi", "kasir", "pengeluaran"])
-    df_hapus = get_data(tabel_pilihan)
+    
+    if tabel_pilihan == "produksi": df_hapus = df_prod
+    elif tabel_pilihan == "kasir": df_hapus = df_kasir
+    else: df_hapus = df_peng
     
     if df_hapus.empty:
         st.info(f"Belum ada data pada kategori {tabel_pilihan}.")
@@ -256,7 +292,8 @@ elif menu == "🗑️ Hapus Data Salah":
                     with conn.session as s:
                         s.execute(text(f"DELETE FROM {tabel_pilihan} WHERE id = :id"), {"id": id_hapus})
                         s.commit()
-                    st.success(f"✅ Data dengan ID {id_hapus} berhasil dihapus!")
+                    st.success(f"✅ Data berhasil dihapus! Saldo disesuaikan otomatis.")
                     st.rerun()
                 else:
                     st.error("Centang kotak konfirmasi terlebih dahulu!")
+

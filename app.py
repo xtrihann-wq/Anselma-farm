@@ -43,7 +43,22 @@ def init_db():
 init_db()
 
 def get_data(table_name):
-    return conn.query(f"SELECT * FROM {table_name} ORDER BY Tanggal DESC, id DESC", ttl=0)
+    # Mengambil data mentah dari database
+    return conn.query(f"SELECT * FROM {table_name}", ttl=0)
+
+# --- FITUR BARU: Merapihkan Tabel di Web (No Urut Otomatis) ---
+def get_display_df(df):
+    if df.empty: return df
+    df_disp = df.copy()
+    # Urutkan berdasarkan tanggal terbaru ke terlama
+    df_disp = df_disp.sort_values(by='tanggal', ascending=False).reset_index(drop=True)
+    # Hapus ID Database dan ganti jadi No. Urut
+    if 'id' in df_disp.columns:
+        df_disp = df_disp.drop(columns=['id'])
+    df_disp.insert(0, 'No.', range(1, len(df_disp) + 1))
+    # Rapihkan judul kolom
+    df_disp.columns = [str(c).replace('_', ' ').title() for c in df_disp.columns]
+    return df_disp
 
 VARIAN_TELUR = {
     "Per Kilo (1 kg)": 32000,
@@ -186,7 +201,7 @@ elif menu == "📝 Catat Produksi Harian":
             st.rerun()
             
     st.subheader("Riwayat Produksi Terbaru")
-    st.dataframe(df_prod.head(5), use_container_width=True)
+    st.dataframe(get_display_df(df_prod).head(5), use_container_width=True)
 
 # --- HALAMAN KASIR ---
 elif menu == "🛒 Kasir / Penjualan":
@@ -215,7 +230,7 @@ elif menu == "🛒 Kasir / Penjualan":
                 
     with col2:
         st.subheader("Riwayat Penjualan Terbaru")
-        st.dataframe(df_kasir.head(5), use_container_width=True)
+        st.dataframe(get_display_df(df_kasir).head(5), use_container_width=True)
 
 # --- HALAMAN PENGELUARAN ---
 elif menu == "💸 Pencatatan Pengeluaran":
@@ -242,27 +257,63 @@ elif menu == "💸 Pencatatan Pengeluaran":
             st.rerun()
             
     st.subheader("Riwayat Pengeluaran Terbaru")
-    st.dataframe(df_peng.head(5), use_container_width=True)
+    st.dataframe(get_display_df(df_peng).head(5), use_container_width=True)
 
-# --- HALAMAN EXPORT EXCEL (PERBAIKAN TOTAL) ---
+# --- HALAMAN EXPORT EXCEL (PERBAIKAN TOTAL, ANTI-ERROR) ---
 elif menu == "📁 Export Excel (Rapi)":
     st.title("📁 Export Data ke Excel")
-    st.markdown("Silakan klik tombol di bawah untuk mengunduh laporan rekapitulasi data Anselma Farm.")
+    st.markdown("Data telah diurutkan berdasarkan tanggal secara rapi. Silakan unduh laporannya.")
     
-    # Fungsi Pembungkus (Official Streamlit Method) agar aman dari error download
     def generate_excel(df1, df2, df3):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            if df1.empty: df1 = pd.DataFrame({"Data": ["Kosong"]})
-            if df2.empty: df2 = pd.DataFrame({"Data": ["Kosong"]})
-            if df3.empty: df3 = pd.DataFrame({"Data": ["Kosong"]})
+            workbook  = writer.book
+            
+            # Format Styling Manual (Anti Error)
+            header_format = workbook.add_format({'bold': True, 'font_color': 'white', 'bg_color': '#1F4E78', 'border': 1, 'align': 'center', 'valign': 'vcenter'})
+            cell_format = workbook.add_format({'border': 1, 'valign': 'vcenter'})
+            format_rp = workbook.add_format({'num_format': 'Rp #,##0', 'border': 1, 'valign': 'vcenter'})
+            format_kg = workbook.add_format({'num_format': '0.00', 'border': 1, 'valign': 'vcenter'})
+            
+            def create_neat_sheet(df, sheet_name):
+                if df.empty:
+                    df_rep = pd.DataFrame({"Keterangan": ["Belum ada data"]})
+                else:
+                    df_rep = df.copy()
+                    # 1. Urutkan tanggal dari Terlama ke Terbaru (Untuk laporan Excel)
+                    df_rep = df_rep.sort_values(by='tanggal', ascending=True).reset_index(drop=True)
+                    # 2. Hapus kolom ID Database
+                    if 'id' in df_rep.columns:
+                        df_rep = df_rep.drop(columns=['id'])
+                    # 3. Buat Nomor Urut (1, 2, 3)
+                    df_rep.insert(0, 'No.', range(1, len(df_rep) + 1))
+                    # 4. Rapihkan Nama Kolom
+                    df_rep.columns = [str(c).replace('_', ' ').title() for c in df_rep.columns]
+
+                # Tulis data TANPA header default Pandas
+                df_rep.to_excel(writer, sheet_name=sheet_name, index=False, header=False, startrow=1)
+                worksheet = writer.sheets[sheet_name]
                 
-            df1.to_excel(writer, sheet_name='Produksi', index=False)
-            df2.to_excel(writer, sheet_name='Penjualan', index=False)
-            df3.to_excel(writer, sheet_name='Pengeluaran', index=False)
+                # Tulis header secara manual agar berwarna biru dan tidak crash
+                for col_num, value in enumerate(df_rep.columns):
+                    worksheet.write(0, col_num, value, header_format)
+                    
+                # Sesuaikan lebar dan format Rupiah/Kg
+                for i, col_name in enumerate(df_rep.columns):
+                    max_len = max(df_rep[col_name].astype(str).map(len).max(), len(col_name)) + 4
+                    if 'Rp' in col_name or 'Harga' in col_name or 'Nominal' in col_name or 'Total' in col_name:
+                        worksheet.set_column(i, i, max_len, format_rp)
+                    elif 'Kg' in col_name or 'Karung' in col_name:
+                        worksheet.set_column(i, i, max_len, format_kg)
+                    else:
+                        worksheet.set_column(i, i, max_len, cell_format)
+
+            create_neat_sheet(df1, 'Data Produksi')
+            create_neat_sheet(df2, 'Data Penjualan')
+            create_neat_sheet(df3, 'Data Pengeluaran')
+            
         return output.getvalue()
     
-    # Panggil fungsi dan simpan di memori
     file_excel = generate_excel(df_prod, df_kasir, df_peng)
     
     st.download_button(
@@ -287,13 +338,17 @@ elif menu == "✏️ Edit / Hapus Data":
     if df_edit.empty:
         st.info(f"Belum ada data pada kategori {tabel_pilihan}.")
     else:
-        st.dataframe(df_edit, use_container_width=True)
+        # Menampilkan tabel ASLI (dengan ID) tapi diurutkan berdasarkan terbaru di atas
+        df_edit_tampil = df_edit.sort_values(by='tanggal', ascending=False).reset_index(drop=True)
+        st.dataframe(df_edit_tampil, use_container_width=True)
         st.divider()
         st.subheader("Pengaturan Data Spesifik")
         
         aksi = st.radio("Pilih Tindakan:", ["✏️ Edit Data", "🗑️ Hapus Data"], horizontal=True)
-        id_pilih = st.selectbox("Pilih ID Data (Kolom 'id'):", df_edit["id"].tolist())
-        row_data = df_edit[df_edit["id"] == id_pilih].iloc[0]
+        
+        # Opsi ID mengikuti data yang ada
+        id_pilih = st.selectbox("Pilih ID Data (Lihat Kolom 'id' di tabel):", df_edit_tampil["id"].tolist())
+        row_data = df_edit_tampil[df_edit_tampil["id"] == id_pilih].iloc[0]
         
         if aksi == "✏️ Edit Data":
             with st.form("form_edit_data"):
@@ -312,7 +367,7 @@ elif menu == "✏️ Edit / Hapus Data":
                             s.execute(text("UPDATE produksi SET Tanggal=:t, Populasi_Aktif=:pa, Mortalitas=:m, Telur_Butir=:tb, Telur_Kg=:tk, Pakan_Kg=:pk WHERE id=:id"),
                                       {"t": str(tgl_e), "pa": pop_e, "m": mati_e, "tb": butir_e, "tk": kg_e, "pk": pakan_e, "id": int(id_pilih)})
                             s.commit()
-                        st.success("✅ Diperbarui! Stok telur & pakan otomatis terkoreksi.")
+                        st.success("✅ Diperbarui! Stok otomatis terkoreksi.")
                         st.rerun()
 
                 elif tabel_pilihan == "kasir":
@@ -330,7 +385,7 @@ elif menu == "✏️ Edit / Hapus Data":
                             s.execute(text("UPDATE kasir SET Tanggal=:t, Varian=:v, Harga_Satuan=:hs, Kuantitas=:k, Total_Rp=:tot, Keterangan_Pelanggan=:ket WHERE id=:id"),
                                       {"t": str(tgl_e), "v": varian_e, "hs": harga_e, "k": qty_e, "tot": tot_e, "ket": ket_e, "id": int(id_pilih)})
                             s.commit()
-                        st.success("✅ Diperbarui! Sisa stok telur laku otomatis terkoreksi.")
+                        st.success("✅ Diperbarui! Sisa stok otomatis terkoreksi.")
                         st.rerun()
 
                 elif tabel_pilihan == "pengeluaran":

@@ -256,42 +256,58 @@ elif menu == "💸 Pencatatan Pengeluaran":
 # --- HALAMAN EXPORT EXCEL ---
 elif menu == "📁 Export Excel (Rapi)":
     st.title("📁 Export Data ke Excel")
+    st.markdown("Sistem telah menyiapkan rekapitulasi data Anda. Silakan klik tombol di bawah untuk mengunduh.")
     
-    if st.button("🔄 Generate File Excel"):
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            workbook  = writer.book
-            format_rp = workbook.add_format({'num_format': 'Rp #,##0'})
-            format_kg = workbook.add_format({'num_format': '0.00'})
-            
-            def create_neat_sheet(df, sheet_name):
-                if df.empty:
-                    df = pd.DataFrame({"Keterangan": ["Belum ada data"]})
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-                worksheet = writer.sheets[sheet_name]
-                max_row, max_col = df.shape
-                column_settings = [{'header': column} for column in df.columns]
-                worksheet.add_table(0, 0, max_row, max_col - 1, {'columns': column_settings, 'style': 'Table Style Medium 9'})
+    # Langsung tarik data dan generate file di belakang layar (tanpa tombol Generate lagi)
+    df_prod = get_data('produksi')
+    df_kasir = get_data('kasir')
+    df_peng = get_data('pengeluaran')
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook  = writer.book
+        format_rp = workbook.add_format({'num_format': 'Rp #,##0'})
+        format_kg = workbook.add_format({'num_format': '0.00'})
+        
+        def create_neat_sheet(df, sheet_name):
+            if df.empty:
+                df = pd.DataFrame({"Keterangan": ["Belum ada data pada tabel ini."]})
                 
-                for i, col in enumerate(df.columns):
-                    max_len = max(df[col].astype(str).map(len).max(), len(col)) + 4
-                    if 'rp' in col.lower() or 'harga' in col.lower():
-                        worksheet.set_column(i, i, max_len, format_rp)
-                    elif 'kg' in col.lower():
-                        worksheet.set_column(i, i, max_len, format_kg)
-                    else:
-                        worksheet.set_column(i, i, max_len)
-
-            create_neat_sheet(df_prod, 'Data_Produksi')
-            create_neat_sheet(df_kasir, 'Data_Penjualan')
-            create_neat_sheet(df_peng, 'Data_Pengeluaran')
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+            worksheet = writer.sheets[sheet_name]
+            max_row, max_col = df.shape
             
-        output.seek(0)
-        st.success("✅ File berhasil dibuat!")
-        st.download_button(label="📥 Download Excel (.xlsx)", data=output,
-                           file_name=f"Laporan_AnselmaFarm_{datetime.today().strftime('%d_%m_%Y')}.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            # Memastikan header terbaca sebagai teks (mencegah error format)
+            column_settings = [{'header': str(column)} for column in df.columns]
+            
+            worksheet.add_table(0, 0, max_row, max_col - 1, {'columns': column_settings, 'style': 'Table Style Medium 9'})
+            
+            for i, col in enumerate(df.columns):
+                max_len = max(df[col].astype(str).map(len).max(), len(str(col))) + 4
+                if 'rp' in str(col).lower() or 'harga' in str(col).lower():
+                    worksheet.set_column(i, i, max_len, format_rp)
+                elif 'kg' in str(col).lower():
+                    worksheet.set_column(i, i, max_len, format_kg)
+                else:
+                    worksheet.set_column(i, i, max_len)
 
+        # Buat ke-3 sheet nya
+        create_neat_sheet(df_prod, 'Data_Produksi')
+        create_neat_sheet(df_kasir, 'Data_Penjualan')
+        create_neat_sheet(df_peng, 'Data_Pengeluaran')
+        
+    output.seek(0)
+    
+    # Tombol download akan langsung muncul dan aman untuk diklik berkali-kali
+    st.success("✅ File siap diunduh!")
+    st.download_button(
+        label="📥 Download Excel Sekarang (.xlsx)", 
+        data=output,
+        file_name=f"Laporan_AnselmaFarm_{datetime.today().strftime('%d_%m_%Y')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+    
 # --- HALAMAN EDIT / HAPUS DATA ---
 elif menu == "✏️ Edit / Hapus Data":
     st.title("✏️ Edit atau Hapus Pencatatan")

@@ -15,7 +15,6 @@ st.set_page_config(page_title="Anselma Farm - PuyuhKu", layout="wide", page_icon
 conn = st.connection("postgresql", type="sql")
 
 def init_db():
-    # Membuat tabel jika belum ada
     with conn.session as s:
         s.execute(text('''CREATE TABLE IF NOT EXISTS produksi 
                      (id SERIAL PRIMARY KEY, Tanggal TEXT, Populasi_Aktif INTEGER, Mortalitas INTEGER, 
@@ -29,26 +28,24 @@ def init_db():
                      (id SERIAL PRIMARY KEY, Tanggal TEXT, Kategori TEXT, Deskripsi TEXT, Nominal_Rp INTEGER)'''))
         s.commit()
         
-    # Migrasi Pintar: Menambahkan kolom Keterangan Pelanggan jika sebelumnya belum ada di tabel kasir
     try:
         with conn.session as s:
             s.execute(text("ALTER TABLE kasir ADD COLUMN Keterangan_Pelanggan TEXT;"))
             s.commit()
     except Exception:
-        pass # Abaikan jika kolom sudah ada
+        pass 
 
 init_db()
 
-# Fungsi ambil data
+# --- FITUR BARU: Data diurutkan berdasarkan Tanggal terbaru (DESC) ---
 def get_data(table_name):
-    return conn.query(f"SELECT * FROM {table_name} ORDER BY id ASC", ttl=0)
+    return conn.query(f"SELECT * FROM {table_name} ORDER BY Tanggal DESC, id DESC", ttl=0)
 
-# Katalog Harga (Sebagai Harga Dasar / Default)
 VARIAN_TELUR = {
     "Per Kilo (1 kg)": 32000,
     "Tengahan (0.5 kg)": 16000,
     "Seperempat (0.25 kg)": 8000,
-    "Harga Khusus/Lainnya": 0 # Opsi tambahan
+    "Harga Khusus/Lainnya": 0
 }
 
 # ==========================================
@@ -84,7 +81,7 @@ menu = st.sidebar.radio("Menu Navigasi:", [
     "🛒 Kasir / Penjualan", 
     "💸 Pencatatan Pengeluaran", 
     "📁 Export Excel (Rapi)",
-    "🗑️ Hapus Data Salah"
+    "✏️ Edit / Hapus Data" # Menu diubah
 ])
 
 # ==========================================
@@ -133,7 +130,9 @@ if menu == "📊 Dashboard & Arus Kas":
     with col_chart1:
         st.subheader("📈 Tren Produksi (Kg)")
         if not df_prod.empty:
-            chart_prod = df_prod.groupby("tanggal")["telur_kg"].sum()
+            # Diurutkan kembali dari terlama ke terbaru khusus untuk grafik agar garisnya maju
+            df_chart = df_prod.sort_values("tanggal")
+            chart_prod = df_chart.groupby("tanggal")["telur_kg"].sum()
             st.line_chart(chart_prod, color="#F1C40F") 
         else:
             st.info("Belum ada data produksi.")
@@ -170,32 +169,23 @@ elif menu == "📝 Catat Produksi Harian":
             st.success("✅ Data tersimpan permanen di Cloud!")
             st.rerun()
             
-    st.dataframe(df_prod.tail(5), use_container_width=True)
+    st.subheader("Riwayat Produksi Terbaru")
+    st.dataframe(df_prod.head(5), use_container_width=True) # head(5) karena data sudah urut terbaru
 
-# --- HALAMAN KASIR (SUDAH DIUPGRADE) ---
+# --- HALAMAN KASIR ---
 elif menu == "🛒 Kasir / Penjualan":
     st.title("🛒 Kasir Penjualan")
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.subheader("Input Transaksi Baru")
-        # Dikeluarkan dari st.form agar harga_satuan bisa merespon interaksi secara live
         tgl_kasir = st.date_input("Tanggal Transaksi", date.today())
-        
-        # 1. Keterangan Pelanggan
-        keterangan = st.text_input("Nama/Keterangan Pelanggan (Opsional)", placeholder="Contoh: Pak Budi (Warung) / Bu Tini")
-        
-        # 2. Varian Telur
+        keterangan = st.text_input("Nama/Keterangan Pelanggan (Opsional)", placeholder="Contoh: Pak Budi (Warung)")
         varian = st.selectbox("Pilih Varian Berat", list(VARIAN_TELUR.keys()))
-        
-        # 3. Harga Satuan (Bisa diedit/diatur manual jika harga naik/turun)
         harga_dasar = VARIAN_TELUR[varian]
         harga_satuan = st.number_input("Harga Satuan (Rp) - Bisa diubah manual", min_value=0, value=harga_dasar, step=500)
-        
-        # 4. Kuantitas
         kuantitas = st.number_input("Kuantitas (Jumlah Beli)", min_value=1, value=1)
         
-        # Kalkulasi Total Real-time
         total_harga = harga_satuan * kuantitas
         st.info(f"💵 **TOTAL PEMBAYARAN: Rp {total_harga:,.0f}**")
         
@@ -204,12 +194,12 @@ elif menu == "🛒 Kasir / Penjualan":
                 s.execute(text("INSERT INTO kasir (Tanggal, Varian, Harga_Satuan, Kuantitas, Total_Rp, Keterangan_Pelanggan) VALUES (:t, :v, :hs, :k, :tot, :ket)"), 
                           {"t": str(tgl_kasir), "v": varian, "hs": harga_satuan, "k": kuantitas, "tot": total_harga, "ket": keterangan})
                 s.commit()
-            st.success(f"✅ Transaksi dari pelanggan dicatat! Saldo bertambah.")
+            st.success(f"✅ Transaksi dicatat! Saldo bertambah.")
             st.rerun()
                 
     with col2:
-        st.subheader("Riwayat Penjualan")
-        st.dataframe(df_kasir.tail(5), use_container_width=True)
+        st.subheader("Riwayat Penjualan Terbaru")
+        st.dataframe(df_kasir.head(5), use_container_width=True)
 
 # --- HALAMAN PENGELUARAN ---
 elif menu == "💸 Pencatatan Pengeluaran":
@@ -217,7 +207,7 @@ elif menu == "💸 Pencatatan Pengeluaran":
     with st.form("form_pengeluaran", clear_on_submit=True):
         tgl_peng = st.date_input("Tanggal", date.today())
         kategori = st.selectbox("Kategori", ["Beli Pakan", "Vitamin/Obat", "Gaji Karyawan", "Listrik & Air", "Lainnya"])
-        deskripsi = st.text_input("Keterangan")
+        deskripsi = st.text_input("Keterangan Detail")
         nominal = st.number_input("Nominal (Rp)", min_value=0, step=10000)
         
         if st.form_submit_button("Simpan Pengeluaran"):
@@ -228,7 +218,8 @@ elif menu == "💸 Pencatatan Pengeluaran":
             st.success("✅ Pengeluaran tercatat! Sisa kas otomatis berkurang.")
             st.rerun()
             
-    st.dataframe(df_peng.tail(5), use_container_width=True)
+    st.subheader("Riwayat Pengeluaran Terbaru")
+    st.dataframe(df_peng.head(5), use_container_width=True)
 
 # --- HALAMAN EXPORT EXCEL ---
 elif menu == "📁 Export Excel (Rapi)":
@@ -269,31 +260,95 @@ elif menu == "📁 Export Excel (Rapi)":
                            file_name=f"Laporan_AnselmaFarm_{datetime.today().strftime('%d_%m_%Y')}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# --- HALAMAN HAPUS DATA ---
-elif menu == "🗑️ Hapus Data Salah":
-    st.title("🗑️ Hapus Pencatatan yang Salah")
+# --- HALAMAN EDIT / HAPUS DATA (FITUR BARU) ---
+elif menu == "✏️ Edit / Hapus Data":
+    st.title("✏️ Edit atau Hapus Pencatatan")
+    st.markdown("Pilih tabel dan ID data yang ingin Anda perbaiki (Tabel otomatis diurutkan dari yang terbaru).")
     
-    tabel_pilihan = st.selectbox("Pilih Kategori:", ["produksi", "kasir", "pengeluaran"])
+    tabel_pilihan = st.selectbox("Pilih Kategori Pencatatan:", ["produksi", "kasir", "pengeluaran"])
     
-    if tabel_pilihan == "produksi": df_hapus = df_prod
-    elif tabel_pilihan == "kasir": df_hapus = df_kasir
-    else: df_hapus = df_peng
+    if tabel_pilihan == "produksi": df_edit = df_prod
+    elif tabel_pilihan == "kasir": df_edit = df_kasir
+    else: df_edit = df_peng
     
-    if df_hapus.empty:
+    if df_edit.empty:
         st.info(f"Belum ada data pada kategori {tabel_pilihan}.")
     else:
-        st.dataframe(df_hapus, use_container_width=True)
-        with st.form("form_hapus"):
-            id_hapus = st.selectbox("Pilih ID Data yang ingin dihapus:", df_hapus["id"].tolist())
-            konfirmasi = st.checkbox("Saya yakin ingin menghapus data ini")
-            
-            if st.form_submit_button("🚨 Hapus Data Sekarang"):
-                if konfirmasi:
-                    with conn.session as s:
-                        s.execute(text(f"DELETE FROM {tabel_pilihan} WHERE id = :id"), {"id": id_hapus})
-                        s.commit()
-                    st.success(f"✅ Data berhasil dihapus! Saldo disesuaikan otomatis.")
-                    st.rerun()
-                else:
-                    st.error("Centang kotak konfirmasi terlebih dahulu!")
+        st.dataframe(df_edit, use_container_width=True)
+        
+        st.divider()
+        st.subheader("Pengaturan Data Spesifik")
+        
+        # Pilihan Aksi
+        aksi = st.radio("Pilih Tindakan:", ["✏️ Edit Data (Perbaiki)", "🗑️ Hapus Data (Permanen)"], horizontal=True)
+        id_pilih = st.selectbox("Pilih ID Data (Lihat kolom 'id' pada tabel di atas):", df_edit["id"].tolist())
+        
+        # Ambil baris data sesuai ID yang dipilih
+        row_data = df_edit[df_edit["id"] == id_pilih].iloc[0]
+        
+        if aksi == "✏️ Edit Data (Perbaiki)":
+            with st.form("form_edit_data"):
+                st.info(f"Sedang mengedit data ID: **{id_pilih}**")
+                
+                if tabel_pilihan == "produksi":
+                    tgl_e = st.date_input("Tanggal Produksi", datetime.strptime(row_data["tanggal"], "%Y-%m-%d").date())
+                    pop_e = st.number_input("Populasi Aktif", value=int(row_data["populasi_aktif"]))
+                    mati_e = st.number_input("Mortalitas", value=int(row_data["mortalitas"]))
+                    butir_e = st.number_input("Telur (Butir)", value=int(row_data["telur_butir"]))
+                    kg_e = st.number_input("Berat Telur (Kg)", value=float(row_data["telur_kg"]), format="%.2f")
+                    pakan_e = st.number_input("Pakan (Kg)", value=float(row_data["pakan_kg"]), format="%.2f")
+                    
+                    if st.form_submit_button("Update Data Produksi"):
+                        with conn.session as s:
+                            s.execute(text("UPDATE produksi SET Tanggal=:t, Populasi_Aktif=:pa, Mortalitas=:m, Telur_Butir=:tb, Telur_Kg=:tk, Pakan_Kg=:pk WHERE id=:id"),
+                                      {"t": str(tgl_e), "pa": pop_e, "m": mati_e, "tb": butir_e, "tk": kg_e, "pk": pakan_e, "id": int(id_pilih)})
+                            s.commit()
+                        st.success("✅ Data Produksi berhasil diperbarui!")
+                        st.rerun()
 
+                elif tabel_pilihan == "kasir":
+                    tgl_e = st.date_input("Tanggal Transaksi", datetime.strptime(row_data["tanggal"], "%Y-%m-%d").date())
+                    # Penanganan aman jika data lama belum punya kolom keterangan
+                    ket_lama = row_data["keterangan_pelanggan"] if "keterangan_pelanggan" in row_data and pd.notna(row_data["keterangan_pelanggan"]) else ""
+                    ket_e = st.text_input("Keterangan", value=str(ket_lama))
+                    varian_e = st.text_input("Varian (Hanya Teks)", value=str(row_data["varian"]))
+                    harga_e = st.number_input("Harga Satuan", value=int(row_data["harga_satuan"]))
+                    qty_e = st.number_input("Kuantitas", value=int(row_data["kuantitas"]))
+                    tot_e = harga_e * qty_e
+                    st.write(f"**Total Baru: Rp {tot_e:,.0f}**")
+                    
+                    if st.form_submit_button("Update Data Kasir"):
+                        with conn.session as s:
+                            s.execute(text("UPDATE kasir SET Tanggal=:t, Varian=:v, Harga_Satuan=:hs, Kuantitas=:k, Total_Rp=:tot, Keterangan_Pelanggan=:ket WHERE id=:id"),
+                                      {"t": str(tgl_e), "v": varian_e, "hs": harga_e, "k": qty_e, "tot": tot_e, "ket": ket_e, "id": int(id_pilih)})
+                            s.commit()
+                        st.success("✅ Data Kasir berhasil diperbarui!")
+                        st.rerun()
+
+                elif tabel_pilihan == "pengeluaran":
+                    tgl_e = st.date_input("Tanggal Pengeluaran", datetime.strptime(row_data["tanggal"], "%Y-%m-%d").date())
+                    kategori_e = st.text_input("Kategori", value=str(row_data["kategori"]))
+                    deskripsi_e = st.text_input("Deskripsi", value=str(row_data["deskripsi"]))
+                    nominal_e = st.number_input("Nominal (Rp)", value=int(row_data["nominal_rp"]))
+                    
+                    if st.form_submit_button("Update Data Pengeluaran"):
+                        with conn.session as s:
+                            s.execute(text("UPDATE pengeluaran SET Tanggal=:t, Kategori=:k, Deskripsi=:d, Nominal_Rp=:n WHERE id=:id"),
+                                      {"t": str(tgl_e), "k": kategori_e, "d": deskripsi_e, "n": nominal_e, "id": int(id_pilih)})
+                            s.commit()
+                        st.success("✅ Data Pengeluaran berhasil diperbarui!")
+                        st.rerun()
+                        
+        else: # Opsi Hapus Data
+            with st.form("form_hapus_data"):
+                st.error(f"Anda akan menghapus data ID: **{id_pilih}** secara permanen.")
+                konfirmasi = st.checkbox("Ya, saya yakin ingin menghapus data ini.")
+                if st.form_submit_button("🚨 Hapus Data"):
+                    if konfirmasi:
+                        with conn.session as s:
+                            s.execute(text(f"DELETE FROM {tabel_pilihan} WHERE id = :id"), {"id": int(id_pilih)})
+                            s.commit()
+                        st.success("✅ Data berhasil dihapus!")
+                        st.rerun()
+                    else:
+                        st.error("Centang kotak konfirmasi terlebih dahulu!")

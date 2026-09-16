@@ -252,60 +252,46 @@ elif menu == "💸 Pencatatan Pengeluaran":
             
     st.subheader("Riwayat Pengeluaran Terbaru")
     st.dataframe(df_peng.head(5), use_container_width=True)
-
 # --- HALAMAN EXPORT EXCEL ---
 elif menu == "📁 Export Excel (Rapi)":
     st.title("📁 Export Data ke Excel")
-    st.markdown("Sistem telah menyiapkan rekapitulasi data Anda. Silakan klik tombol di bawah untuk mengunduh.")
+    st.markdown("Sistem telah merekap data Anda. Silakan unduh laporan lengkap di bawah ini.")
     
-    # Langsung tarik data dan generate file di belakang layar (tanpa tombol Generate lagi)
+    # 1. Tarik data langsung
     df_prod = get_data('produksi')
     df_kasir = get_data('kasir')
     df_peng = get_data('pengeluaran')
     
+    # 2. Buat file Excel di memori menggunakan "Mode Aman"
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        workbook  = writer.book
-        format_rp = workbook.add_format({'num_format': 'Rp #,##0'})
-        format_kg = workbook.add_format({'num_format': '0.00'})
         
-        def create_neat_sheet(df, sheet_name):
+        def create_safe_sheet(df, sheet_name):
             if df.empty:
                 df = pd.DataFrame({"Keterangan": ["Belum ada data pada tabel ini."]})
-                
+            
+            # Pandas menulis data murni ke Excel (Tanpa tabel biru otomatis yang bikin error)
             df.to_excel(writer, sheet_name=sheet_name, index=False)
             worksheet = writer.sheets[sheet_name]
-            max_row, max_col = df.shape
             
-            # Memastikan header terbaca sebagai teks (mencegah error format)
-            column_settings = [{'header': str(column)} for column in df.columns]
-            
-            worksheet.add_table(0, 0, max_row, max_col - 1, {'columns': column_settings, 'style': 'Table Style Medium 9'})
-            
+            # Melebarkan kolom secara otomatis agar tulisan tidak terpotong
             for i, col in enumerate(df.columns):
-                max_len = max(df[col].astype(str).map(len).max(), len(str(col))) + 4
-                if 'rp' in str(col).lower() or 'harga' in str(col).lower():
-                    worksheet.set_column(i, i, max_len, format_rp)
-                elif 'kg' in str(col).lower():
-                    worksheet.set_column(i, i, max_len, format_kg)
-                else:
-                    worksheet.set_column(i, i, max_len)
+                max_len = max(df[col].astype(str).map(len).max(), len(str(col))) + 3
+                worksheet.set_column(i, i, max_len)
 
-        # Buat ke-3 sheet nya
-        create_neat_sheet(df_prod, 'Data_Produksi')
-        create_neat_sheet(df_kasir, 'Data_Penjualan')
-        create_neat_sheet(df_peng, 'Data_Pengeluaran')
+        # Eksekusi pembuatan 3 sheet
+        create_safe_sheet(df_prod, 'Data_Produksi')
+        create_safe_sheet(df_kasir, 'Data_Penjualan')
+        create_safe_sheet(df_peng, 'Data_Pengeluaran')
         
-    output.seek(0)
-    
-    # Tombol download akan langsung muncul dan aman untuk diklik berkali-kali
-    st.success("✅ File siap diunduh!")
+    # 3. Tombol download (Menggunakan .getvalue() agar aman dari sistem putus jaringan)
     st.download_button(
         label="📥 Download Excel Sekarang (.xlsx)", 
-        data=output,
+        data=output.getvalue(), 
         file_name=f"Laporan_AnselmaFarm_{datetime.today().strftime('%d_%m_%Y')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
+        use_container_width=True,
+        type="primary"
     )
 
 # --- HALAMAN EDIT / HAPUS DATA ---

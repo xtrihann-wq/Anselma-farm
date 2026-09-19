@@ -26,6 +26,10 @@ def init_db():
                      
         s.execute(text('''CREATE TABLE IF NOT EXISTS pengeluaran 
                      (id SERIAL PRIMARY KEY, Tanggal TEXT, Kategori TEXT, Deskripsi TEXT, Nominal_Rp INTEGER)'''))
+                     
+        # TABEL BARU UNTUK SUNTIKAN MODAL
+        s.execute(text('''CREATE TABLE IF NOT EXISTS modal_usaha 
+                     (id SERIAL PRIMARY KEY, Tanggal TEXT, Keterangan TEXT, Nominal_Rp INTEGER)'''))
         s.commit()
         
     try:
@@ -43,7 +47,6 @@ def init_db():
 init_db()
 
 def get_data(table_name):
-    # Selalu ambil data terbaru dari database, diurutkan descending
     return conn.query(f"SELECT * FROM {table_name} ORDER BY Tanggal DESC, id DESC", ttl=0)
 
 def get_display_df(df):
@@ -69,13 +72,31 @@ VARIAN_TELUR = {
 df_prod = get_data('produksi')
 df_kasir = get_data('kasir')
 df_peng = get_data('pengeluaran')
+df_modal = get_data('modal_usaha')
 
-# Hitung Keuangan
-total_masuk = df_kasir["total_rp"].sum() if not df_kasir.empty else 0
-total_keluar = df_peng["nominal_rp"].sum() if not df_peng.empty else 0
-sisa_kas = total_masuk - total_keluar
+# --- KALKULASI KEUANGAN MURNI & OPERASIONAL ---
+# 1. Total Uang Masuk Aktual
+total_modal_masuk = df_modal['nominal_rp'].sum() if not df_modal.empty else 0
+total_penjualan = df_kasir["total_rp"].sum() if not df_kasir.empty else 0
+total_pemasukan_all = total_modal_masuk + total_penjualan
 
-# Hitung Telur
+# 2. Total Uang Keluar Aktual & Pemisahan Operasional
+if not df_peng.empty:
+    total_keluar_all = df_peng["nominal_rp"].sum()
+    # Mengabaikan Belanja Modal dari P&L Operasional
+    df_peng_ops = df_peng[df_peng['kategori'] != 'Belanja Modal / Aset']
+    total_keluar_ops = df_peng_ops['nominal_rp'].sum()
+else:
+    total_keluar_all = 0
+    total_keluar_ops = 0
+
+# SISA KAS AKTUAL DI DOMPET/REKENING
+sisa_kas = total_pemasukan_all - total_keluar_all
+
+# LABA BERSIH OPERASIONAL (Penjualan - Pengeluaran Non-Modal)
+laba_operasional = total_penjualan - total_keluar_ops
+
+# --- KALKULASI STOK ---
 total_telur_panen = df_prod["telur_kg"].sum() if not df_prod.empty else 0
 
 def hitung_berat_terjual(row):
@@ -94,7 +115,6 @@ else:
 
 sisa_telur_kg = total_telur_panen - total_telur_terjual
 
-# Hitung Pakan
 if not df_peng.empty and 'jumlah_karung' in df_peng.columns:
     total_karung_masuk = df_peng["jumlah_karung"].sum()
 else:
@@ -130,6 +150,7 @@ else:
 st.sidebar.divider()
 menu = st.sidebar.radio("Menu Navigasi:", [
     "📊 Dashboard Utama", 
+    "💰 Suntikan Modal (Baru)",
     "📝 Catat Produksi Harian", 
     "🛒 Kasir / Penjualan", 
     "💸 Pencatatan Pengeluaran", 
@@ -143,17 +164,18 @@ menu = st.sidebar.radio("Menu Navigasi:", [
 
 # --- HALAMAN DASHBOARD ---
 if menu == "📊 Dashboard Utama":
-    st.title("📊 Dashboard Utama Anselma Farm")
+    st.title("📊 Dashboard Kinerja Operasional")
+    st.markdown("*Dashboard ini hanya menampilkan kinerja operasional murni (Penjualan vs Pengeluaran Rutin). Belanja Modal Awal dibekukan/dipisahkan dari perhitungan ini.*")
     
-    total_telur_kg = total_telur_panen
-    total_pakan_kg = total_pakan_terpakai_kg
-    fcr = (total_pakan_kg / total_telur_kg) if total_telur_kg > 0 else 0
-
     col1, col2, col3, col4 = st.columns(4)
-    with col1: st.metric("Total Panen Telur", f"{total_telur_kg:.2f} Kg")
-    with col2: st.metric("Rasio Pakan (FCR)", f"{fcr:.2f}")
-    with col3: st.metric("Total Pemasukan", f"Rp {total_masuk:,.0f}")
-    with col4: st.metric("Total Pengeluaran", f"Rp {total_keluar:,.0f}")
+    with col1: 
+        st.metric("Pendapatan Operasional", f"Rp {total_penjualan:,.0f}")
+    with col2: 
+        st.metric("Pengeluaran Operasional", f"Rp {total_keluar_ops:,.0f}")
+    with col3: 
+        st.metric("Laba Bersih Operasional", f"Rp {laba_operasional:,.0f}", delta="Untung" if laba_operasional >= 0 else "Rugi")
+    with col4: 
+        st.metric("Total Suntikan Modal", f"Rp {total_modal_masuk:,.0f}")
 
     st.divider()
     
@@ -168,12 +190,33 @@ if menu == "📊 Dashboard Utama":
             st.info("Belum ada data produksi.")
             
     with col_chart2:
-        st.subheader("💰 Distribusi Pengeluaran")
-        if not df_peng.empty:
-            peng_kategori = df_peng.groupby('kategori')['nominal_rp'].sum()
+        st.subheader("💰 Distribusi Pengeluaran Operasional")
+        if not df_peng_ops.empty:
+            peng_kategori = df_peng_ops.groupby('kategori')['nominal_rp'].sum()
             st.bar_chart(peng_kategori, color="#9B59B6") 
         else:
-            st.info("Belum ada data pengeluaran.")
+            st.info("Belum ada data pengeluaran operasional.")
+
+# --- HALAMAN SUNTIKAN MODAL (BARU) ---
+elif menu == "💰 Suntikan Modal (Baru)":
+    st.title("💰 Pencatatan Modal Usaha")
+    st.markdown("Masukkan uang modal awal (dari kantong pribadi/investasi) ke sini agar **Sisa Kas** Anda tidak minus saat melakukan belanja alat/kandang.")
+    
+    with st.form("form_modal", clear_on_submit=True):
+        tgl_modal = st.date_input("Tanggal Modal Masuk", date.today())
+        keterangan_modal = st.text_input("Keterangan", placeholder="Contoh: Modal Awal Pribadi")
+        nominal_modal = st.number_input("Nominal Modal Masuk (Rp)", min_value=0, step=100000)
+        
+        if st.form_submit_button("Simpan Modal"):
+            with conn.session as s:
+                s.execute(text("INSERT INTO modal_usaha (Tanggal, Keterangan, Nominal_Rp) VALUES (:t, :k, :n)"), 
+                          {"t": str(tgl_modal), "k": keterangan_modal, "n": nominal_modal})
+                s.commit()
+            st.success("✅ Modal tercatat! Sisa kas otomatis bertambah.")
+            st.rerun()
+            
+    st.subheader("Riwayat Modal Masuk")
+    st.dataframe(get_display_df(df_modal), use_container_width=True)
 
 # --- HALAMAN PRODUKSI ---
 elif menu == "📝 Catat Produksi Harian":
@@ -236,7 +279,9 @@ elif menu == "💸 Pencatatan Pengeluaran":
     st.title("💸 Catat Arus Kas Keluar")
     with st.form("form_pengeluaran", clear_on_submit=True):
         tgl_peng = st.date_input("Tanggal", date.today())
-        kategori = st.selectbox("Kategori", ["Beli Pakan", "Vitamin/Obat", "Gaji Karyawan", "Listrik & Air", "Lainnya"])
+        
+        # OPSI BARU: BELANJA MODAL / ASET
+        kategori = st.selectbox("Kategori", ["Beli Pakan", "Vitamin/Obat", "Gaji Karyawan", "Listrik & Air", "Belanja Modal / Aset", "Lainnya"])
         
         if kategori == "Beli Pakan":
             st.info("💡 Masukkan jumlah karung agar stok pakan bertambah.")
@@ -244,7 +289,10 @@ elif menu == "💸 Pencatatan Pengeluaran":
         else:
             jml_karung = 0.0
             
-        deskripsi = st.text_input("Keterangan Detail (Contoh: Beli sentrat)")
+        if kategori == "Belanja Modal / Aset":
+            st.warning("⚙️ **Catatan:** Pembelian dengan kategori ini (contoh: pembuatan kandang) akan memotong Sisa Kas, tapi **TIDAK** dihitung ke dalam Total Pengeluaran Operasional di Dashboard.")
+            
+        deskripsi = st.text_input("Keterangan Detail (Contoh: Beli sentrat / Beli kawat kandang)")
         nominal = st.number_input("Nominal (Rp)", min_value=0, step=10000)
         
         if st.form_submit_button("Simpan Pengeluaran"):
@@ -252,7 +300,7 @@ elif menu == "💸 Pencatatan Pengeluaran":
                 s.execute(text("INSERT INTO pengeluaran (Tanggal, Kategori, Deskripsi, Nominal_Rp, Jumlah_Karung) VALUES (:t, :k, :d, :n, :jk)"), 
                           {"t": str(tgl_peng), "k": kategori, "d": deskripsi, "n": nominal, "jk": jml_karung})
                 s.commit()
-            st.success("✅ Pengeluaran tercatat! Kas berkurang dan Stok Pakan otomatis bertambah.")
+            st.success("✅ Pengeluaran tercatat! Kas berkurang.")
             st.rerun()
             
     st.subheader("Riwayat Pengeluaran Terbaru")
@@ -261,9 +309,9 @@ elif menu == "💸 Pencatatan Pengeluaran":
 # --- HALAMAN EXPORT EXCEL ---
 elif menu == "📁 Export Excel (Rapi)":
     st.title("📁 Export Data ke Excel")
-    st.markdown("Sistem telah menyiapkan rekapitulasi data Anda. Data akan diurutkan dari yang terlama hingga terbaru di dalam file Excel.")
+    st.markdown("Seluruh data (termasuk Suntikan Modal) akan dicetak rapi ke dalam Excel.")
     
-    def generate_excel(df1, df2, df3):
+    def generate_excel(df1, df2, df3, df4):
         output = io.BytesIO()
         try:
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -278,27 +326,18 @@ elif menu == "📁 Export Excel (Rapi)":
                         df_rep = pd.DataFrame({"Keterangan": ["Belum ada data"]})
                     else:
                         df_rep = df.copy()
-                        # Balik urutan: Terlama di atas untuk laporan Excel
                         df_rep = df_rep.sort_values(by=['tanggal', 'id'], ascending=[True, True]).reset_index(drop=True)
-                        
-                        # Hapus ID dan kolom internal lainnya
                         hapus_cols = [c for c in df_rep.columns if str(c).lower() in ['id', 'berat_terjual_kg']]
                         df_rep = df_rep.drop(columns=hapus_cols, errors='ignore')
-                        
-                        # Buat kolom No.
                         df_rep.insert(0, 'No.', range(1, len(df_rep) + 1))
-                        # Rapihkan judul kolom
                         df_rep.columns = [str(c).replace('_', ' ').title() for c in df_rep.columns]
 
-                    # Tulis Data
                     df_rep.to_excel(writer, sheet_name=sheet_name, index=False, header=False, startrow=1)
                     worksheet = writer.sheets[sheet_name]
                     
-                    # Tulis Header (Judul Kolom)
                     for col_num, value in enumerate(df_rep.columns):
                         worksheet.write(0, col_num, value, header_format)
                         
-                    # Atur Lebar Kolom
                     for i, col_name in enumerate(df_rep.columns):
                         try:
                             data_max = df_rep[col_name].astype(str).map(len).max()
@@ -316,19 +355,17 @@ elif menu == "📁 Export Excel (Rapi)":
                 create_neat_sheet(df1, 'Data Produksi')
                 create_neat_sheet(df2, 'Data Penjualan')
                 create_neat_sheet(df3, 'Data Pengeluaran')
+                create_neat_sheet(df4, 'Data Modal Masuk') # Sheet Tambahan
         except Exception as e:
             return f"ERROR: {str(e)}"
             
         return output.getvalue()
     
-    file_excel = generate_excel(df_prod, df_kasir, df_peng)
+    file_excel = generate_excel(df_prod, df_kasir, df_peng, df_modal)
     
     if isinstance(file_excel, str) and file_excel.startswith("ERROR:"):
         st.error("🚨 **GAGAL MEMBUAT EXCEL** 🚨")
-        st.code(file_excel)
-        st.info("💡 **PENTING:** Pastikan file `requirements.txt` Anda memiliki tulisan `xlsxwriter`. Lalu lakukan Reboot App di Streamlit.")
     else:
-        st.success("✅ File rekapitulasi Excel siap diunduh!")
         st.download_button(
             label="📥 Download Excel Sekarang (.xlsx)", 
             data=file_excel,
@@ -342,16 +379,16 @@ elif menu == "📁 Export Excel (Rapi)":
 elif menu == "✏️ Edit / Hapus Data":
     st.title("✏️ Edit atau Hapus Pencatatan")
     
-    tabel_pilihan = st.selectbox("Pilih Kategori Pencatatan:", ["produksi", "kasir", "pengeluaran"])
+    tabel_pilihan = st.selectbox("Pilih Kategori Pencatatan:", ["produksi", "kasir", "pengeluaran", "modal_usaha"])
     
     if tabel_pilihan == "produksi": df_edit = df_prod
     elif tabel_pilihan == "kasir": df_edit = df_kasir
-    else: df_edit = df_peng
+    elif tabel_pilihan == "pengeluaran": df_edit = df_peng
+    else: df_edit = df_modal
     
     if df_edit.empty:
         st.info(f"Belum ada data pada kategori {tabel_pilihan}.")
     else:
-        # Menampilkan tabel ASLI (dengan ID) tapi diurutkan berdasarkan terbaru di atas
         df_edit_tampil = df_edit.sort_values(by=['tanggal', 'id'], ascending=[False, False]).reset_index(drop=True)
         st.dataframe(df_edit_tampil, use_container_width=True)
         st.divider()
@@ -378,7 +415,7 @@ elif menu == "✏️ Edit / Hapus Data":
                             s.execute(text("UPDATE produksi SET Tanggal=:t, Populasi_Aktif=:pa, Mortalitas=:m, Telur_Butir=:tb, Telur_Kg=:tk, Pakan_Kg=:pk WHERE id=:id"),
                                       {"t": str(tgl_e), "pa": pop_e, "m": mati_e, "tb": butir_e, "tk": kg_e, "pk": pakan_e, "id": int(id_pilih)})
                             s.commit()
-                        st.success("✅ Diperbarui! Stok otomatis terkoreksi.")
+                        st.success("✅ Diperbarui!")
                         st.rerun()
 
                 elif tabel_pilihan == "kasir":
@@ -389,25 +426,22 @@ elif menu == "✏️ Edit / Hapus Data":
                     harga_e = st.number_input("Harga Satuan", value=int(row_data["harga_satuan"]))
                     qty_e = st.number_input("Kuantitas", value=int(row_data["kuantitas"]))
                     tot_e = harga_e * qty_e
-                    st.write(f"**Total Baru: Rp {tot_e:,.0f}**")
                     
                     if st.form_submit_button("Update Data"):
                         with conn.session as s:
                             s.execute(text("UPDATE kasir SET Tanggal=:t, Varian=:v, Harga_Satuan=:hs, Kuantitas=:k, Total_Rp=:tot, Keterangan_Pelanggan=:ket WHERE id=:id"),
                                       {"t": str(tgl_e), "v": varian_e, "hs": harga_e, "k": qty_e, "tot": tot_e, "ket": ket_e, "id": int(id_pilih)})
                             s.commit()
-                        st.success("✅ Diperbarui! Sisa stok otomatis terkoreksi.")
+                        st.success("✅ Diperbarui!")
                         st.rerun()
 
                 elif tabel_pilihan == "pengeluaran":
                     tgl_e = st.date_input("Tanggal", datetime.strptime(row_data["tanggal"], "%Y-%m-%d").date())
-                    kategori_e = st.text_input("Kategori", value=str(row_data["kategori"]))
+                    # MENGUBAH OPSI KATEGORI AGAR ADA BELANJA MODAL
+                    kategori_e = st.selectbox("Kategori", ["Beli Pakan", "Vitamin/Obat", "Gaji Karyawan", "Listrik & Air", "Belanja Modal / Aset", "Lainnya"], index=["Beli Pakan", "Vitamin/Obat", "Gaji Karyawan", "Listrik & Air", "Belanja Modal / Aset", "Lainnya"].index(str(row_data["kategori"])) if str(row_data["kategori"]) in ["Beli Pakan", "Vitamin/Obat", "Gaji Karyawan", "Listrik & Air", "Belanja Modal / Aset", "Lainnya"] else 5)
                     
                     jml_karung_lama = float(row_data["jumlah_karung"]) if "jumlah_karung" in row_data and pd.notna(row_data["jumlah_karung"]) else 0.0
-                    if kategori_e == "Beli Pakan":
-                        jml_karung_e = st.number_input("Jumlah Karung Pakan", value=jml_karung_lama, step=0.5)
-                    else:
-                        jml_karung_e = 0.0
+                    jml_karung_e = st.number_input("Jumlah Karung Pakan", value=jml_karung_lama, step=0.5) if kategori_e == "Beli Pakan" else 0.0
                         
                     deskripsi_e = st.text_input("Deskripsi", value=str(row_data["deskripsi"]))
                     nominal_e = st.number_input("Nominal (Rp)", value=int(row_data["nominal_rp"]))
@@ -417,7 +451,20 @@ elif menu == "✏️ Edit / Hapus Data":
                             s.execute(text("UPDATE pengeluaran SET Tanggal=:t, Kategori=:k, Deskripsi=:d, Nominal_Rp=:n, Jumlah_Karung=:jk WHERE id=:id"),
                                       {"t": str(tgl_e), "k": kategori_e, "d": deskripsi_e, "n": nominal_e, "jk": jml_karung_e, "id": int(id_pilih)})
                             s.commit()
-                        st.success("✅ Diperbarui! Stok pakan otomatis terkoreksi.")
+                        st.success("✅ Diperbarui!")
+                        st.rerun()
+                        
+                elif tabel_pilihan == "modal_usaha":
+                    tgl_e = st.date_input("Tanggal", datetime.strptime(row_data["tanggal"], "%Y-%m-%d").date())
+                    ket_e = st.text_input("Keterangan", value=str(row_data["keterangan"]))
+                    nominal_e = st.number_input("Nominal (Rp)", value=int(row_data["nominal_rp"]))
+                    
+                    if st.form_submit_button("Update Data"):
+                        with conn.session as s:
+                            s.execute(text("UPDATE modal_usaha SET Tanggal=:t, Keterangan=:k, Nominal_Rp=:n WHERE id=:id"),
+                                      {"t": str(tgl_e), "k": ket_e, "n": nominal_e, "id": int(id_pilih)})
+                            s.commit()
+                        st.success("✅ Diperbarui!")
                         st.rerun()
                         
         else:
@@ -429,7 +476,7 @@ elif menu == "✏️ Edit / Hapus Data":
                         with conn.session as s:
                             s.execute(text(f"DELETE FROM {tabel_pilihan} WHERE id = :id"), {"id": int(id_pilih)})
                             s.commit()
-                        st.success("✅ Data dihapus! Semua stok otomatis dikalkulasi ulang.")
+                        st.success("✅ Data dihapus!")
                         st.rerun()
                     else:
                         st.error("Centang kotak konfirmasi terlebih dahulu!")
